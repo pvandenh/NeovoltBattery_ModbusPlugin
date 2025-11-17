@@ -175,6 +175,19 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 power_raw = self._to_unsigned_32(dispatch_regs[1], dispatch_regs[2])
                 data["dispatch_power"] = power_raw - 32000
 
+            # Calculate additional useful values
+            # Total house load = PV Production + Battery Discharge - Grid Export
+            # (or Grid Import + PV Production - Battery Charge)
+            pv_power = data.get("pv_power_total", 0)
+            battery_power = data.get("battery_power", 0)  # Positive = discharging
+            grid_power = data.get("grid_power_total", 0)  # Positive = importing
+            
+            # House load calculation
+            data["total_house_load"] = max(0, pv_power + battery_power - grid_power)
+            
+            # Current PV production (sum of all strings)
+            data["current_pv_production"] = data.get("pv1_power", 0) + data.get("pv2_power", 0) + data.get("pv3_power", 0)
+
             _LOGGER.debug(f"Successfully fetched data: {len(data)} keys")
             return data
 

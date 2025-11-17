@@ -27,6 +27,7 @@ async def async_setup_entry(
     switches = [
         NeovoltForceChargeSwitch(coordinator, device_info, client, hass),
         NeovoltForceDischargeSwitch(coordinator, device_info, client, hass),
+        NeovoltPreventSolarChargingSwitch(coordinator, device_info, client, hass),
     ]
     
     async_add_entities(switches)
@@ -70,13 +71,6 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
             soc_value = int(soc_target / 0.392157)  # Convert percentage to raw value
             
             # Prepare dispatch registers
-            # Register 0x0880: Start (0=stop, 1=start)
-            # Register 0x0881-0x0882: Active power (32000 - watts for charging, 32000 + watts for discharging)
-            # Register 0x0883-0x0884: Reactive power (always 32000 for no reactive power)
-            # Register 0x0885: Mode (0=power control, 1=time control, 2=SOC control)
-            # Register 0x0886: SOC target/cutoff
-            # Register 0x0887-0x0888: Duration in seconds
-            
             values = [
                 1,                      # Dispatch start
                 0,                      # Power high byte
@@ -180,3 +174,81 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
             await self.coordinator.async_request_refresh()
         except Exception as e:
             _LOGGER.error(f"Failed to disable force discharging: {e}")
+
+
+class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
+    """Prevent solar charging switch - stops battery from charging from solar."""
+
+    def __init__(self, coordinator, device_info, client, hass):
+        """Initialize the switch."""
+        super().__init__(coordinator)
+        self._client = client
+        self._hass = hass
+        self._attr_name = "Neovolt Inverter Prevent Solar Charging"
+        self._attr_unique_id = "neovolt_inverter_prevent_solar_charging"
+        self._attr_icon = "mdi:battery-lock"
+        self._attr_device_info = device_info
+        self._is_active = False
+
+    @property
+    def is_on(self):
+        """Return if switch is on."""
+        # Check if we're in a discharge mode with minimal power (prevents charging)
+        data = self.coordinator.data
+        dispatch_start = data.get("dispatch_start", 0)
+        dispatch_power = data.get("dispatch_power", 0)
+        
+        # We're active if dispatch is on and power is at our "prevent charging" level (small discharge)
+        # Using 50W discharge as the "prevent charging" marker
+        return dispatch_start == 1 and 0 < dispatch_power <= 100
+
+    async def async_turn_on(self, **kwargs):
+        """Turn on prevent solar charging mode."""
+        try:
+            # Get duration from number entity if available
+            duration_entity = self._hass.states.get("number.neovolt_inverter_prevent_solar_charging_duration")
+            duration = int(float(duration_entity.state)) if duration_entity else 480
+            duration_seconds = duration * 60
+            
+            # Get current SOC to use as cutoff (prevent discharge below current level)
+            current_soc = self.coordinator.data.get("battery_soc", 20)
+            soc_cutoff = max(int(current_soc) - 2, 10)  # 2% buffer, minimum 10%
+            soc_value = int(soc_cutoff / 0.392157)  # Convert percentage to raw value
+            
+            # Set a very small discharge power (50W) to prevent charging
+            # This effectively tells the inverter to slightly discharge, preventing any charging
+            prevent_charging_power = 50  # 50W minimal discharge
+            
+            values = [
+                1,                              # Dispatch start
+                0,                              # Power high byte
+                32000 + prevent_charging_power, # Power low byte (tiny positive = prevent charging)
+                0,                              # Reactive power high
+                32000,                          # Reactive power low (no reactive power)
+                2,                              # Mode: SOC control (stops at cutoff)
+                soc_value,                      # SOC cutoff (current - 2%)
+                0,                              # Time high byte
+                duration_seconds,               # Time low byte (duration)
+            ]
+            
+            _LOGGER.info(f"Enabling prevent solar charging mode for {duration} minutes (SOC cutoff: {soc_cutoff}%)")
+            _LOGGER.debug(f"Current battery SOC: {current_soc}%, preventing charge with 50W discharge command")
+            
+            await self._hass.async_add_executor_job(
+                self._client.write_registers, 0x0880, values
+            )
+            await self.coordinator.async_request_refresh()
+        except Exception as e:
+            _LOGGER.error(f"Failed to enable prevent solar charging: {e}")
+
+    async def async_turn_off(self, **kwargs):
+        """Turn off prevent solar charging mode (return to normal operation)."""
+        try:
+            _LOGGER.info("Disabling prevent solar charging mode (returning to normal operation)")
+            values = [0, 0, 32000, 0, 32000, 0, 0, 0, 90]
+            await self._hass.async_add_executor_job(
+                self._client.write_registers, 0x0880, values
+            )
+            await self.coordinator.async_request_refresh()
+        except Exception as e:
+            _LOGGER.error(f"Failed to disable prevent solar charging: {e}")

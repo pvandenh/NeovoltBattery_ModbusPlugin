@@ -82,6 +82,14 @@ async def async_setup_entry(
             4, 50, 1, PERCENTAGE, None, False,
             default_value=20, icon="mdi:battery-charging-20"
         ),
+        
+        # Prevent Solar Charging Controls (local storage, used by switch)
+        NeovoltNumber(
+            coordinator, device_info, client, hass,
+            "prevent_solar_charging_duration", "Prevent Solar Charging Duration",
+            15, 1440, 15, UnitOfTime.MINUTES, None, False,
+            default_value=480, icon="mdi:timer-lock"
+        ),
     ]
     
     async_add_entities(numbers)

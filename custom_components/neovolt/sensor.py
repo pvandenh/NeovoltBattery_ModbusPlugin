@@ -198,6 +198,14 @@ async def async_setup_entry(
         NeovoltSensor(coordinator, device_info, "dispatch_power", "Dispatch Power",
                      UnitOfPower.WATT, SensorDeviceClass.POWER,
                      SensorStateClass.MEASUREMENT, "mdi:flash"),
+        
+        # Calculated/Template Sensors
+        NeovoltCalculatedSensor(coordinator, device_info, "total_house_load", "Total House Load",
+                               UnitOfPower.WATT, SensorDeviceClass.POWER,
+                               SensorStateClass.MEASUREMENT, "mdi:home-lightning-bolt-outline"),
+        NeovoltCalculatedSensor(coordinator, device_info, "current_pv_production", "Current PV Production",
+                               UnitOfPower.WATT, SensorDeviceClass.POWER,
+                               SensorStateClass.MEASUREMENT, "mdi:solar-power"),
     ]
     
     async_add_entities(sensors)
@@ -223,3 +231,47 @@ class NeovoltSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         """Return the state of the sensor."""
         return self.coordinator.data.get(self._key)
+
+
+class NeovoltCalculatedSensor(CoordinatorEntity, SensorEntity):
+    """Representation of a calculated Neovolt sensor."""
+
+    def __init__(self, coordinator, device_info, key, name, unit, device_class, 
+                 state_class, icon):
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_name = f"Neovolt Inverter {name}"
+        self._attr_unique_id = f"neovolt_inverter_{key}"
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_state_class = state_class
+        self._attr_icon = icon
+        self._attr_device_info = device_info
+
+    @property
+    def native_value(self):
+        """Return the calculated state of the sensor."""
+        data = self.coordinator.data
+        
+        if self._key == "total_house_load":
+            # House Load = Grid Power + Battery Power + PV Power
+            # If grid power is negative (exporting), we subtract it
+            # Battery power positive = discharging (adds to house load)
+            # PV power is what's being produced
+            grid_power = data.get("grid_power_total", 0)
+            battery_power = data.get("battery_power", 0)
+            pv_power = data.get("pv_power_total", 0)
+            
+            # House load calculation
+            house_load = pv_power + battery_power - grid_power
+            return max(0, house_load)  # Don't show negative values
+            
+        elif self._key == "current_pv_production":
+            # Current PV production from all strings
+            pv1 = data.get("pv1_power", 0)
+            pv2 = data.get("pv2_power", 0)
+            pv3 = data.get("pv3_power", 0)
+            return pv1 + pv2 + pv3
+            
+        return None
