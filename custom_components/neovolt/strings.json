@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Neovolt Solar Inverter",
+        "description": "Configure your Neovolt inverter Modbus TCP connection.\n\nMake sure your Modbus gateway (e.g., EW11A) is:\n- Connected to the same network as Home Assistant\n- Configured in TCP Server mode\n- Port 502 is open and accessible",
+        "data": {
+          "host": "Host (IP Address)",
+          "port": "Modbus TCP Port",
+          "slave_id": "Modbus Slave ID"
+        },
+        "data_description": {
+          "host": "IP address of your Modbus TCP gateway (e.g., 192.168.1.100)",
+          "port": "Usually 502 for Modbus TCP",
+          "slave_id": "Usually 85 (0x55) for Neovolt inverters"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the inverter.\n\nError: {error}\n\nTroubleshooting:\n1. Verify the IP address is correct\n2. Check that port 502 is accessible (firewall)\n3. Ensure Modbus gateway is powered on\n4. Verify gateway is in TCP Server mode\n5. Test with: ping [IP] from Home Assistant terminal",
+      "unknown": "Unexpected error occurred: {error}\n\nPlease check Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This device is already configured. Check Devices & Services."
+    }
+  }
+}
