@@ -176,14 +176,46 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 data["dispatch_power"] = power_raw - 32000
 
             # Calculate additional useful values
-            # Total house load = PV Production + Battery Discharge - Grid Export
-            # (or Grid Import + PV Production - Battery Charge)
-            pv_power = data.get("pv_power_total", 0)
-            battery_power = data.get("battery_power", 0)  # Positive = discharging
-            grid_power = data.get("grid_power_total", 0)  # Positive = importing
+            # House load calculation based on power flow
+            # Grid power: negative = exporting to grid, positive = importing from grid
+            # Battery power: positive = discharging to house, negative = charging from system
+            # PV power: always positive (what solar produces)
+            #
+            # Energy balance: PV + Battery - Grid = House Load
+            # - If Grid is negative (exporting), we subtract negative (adds back)
+            # - If Grid is positive (importing), we subtract it
+            # 
+            # Example 1: PV=6kW, Grid=-6kW (export), Batt=0 → House = 6-(-6)+0 = 12kW ❌
+            # That's wrong! Let's reconsider...
+            #
+            # Correct logic:
+            # PV generates power → splits to → House + Battery + Grid
+            # So: PV = House + Battery_Charge + Grid_Export
+            # Therefore: House = PV - Battery_Charge - Grid_Export
+            #
+            # With signed conventions:
+            # - Battery_Power: positive=discharge (from battery), negative=charge (to battery)
+            # - Grid_Power: positive=import (from grid), negative=export (to grid)
+            #
+            # House = PV + Battery_Discharge - Battery_Charge - Grid_Export + Grid_Import
+            # House = PV + Battery_Power - (-Grid_Export) + Grid_Import
+            # House = PV + Battery_Power + Grid_Export (when grid negative)
+            #
+            # Wait, let's use actual power flow:
+            # House_Load = PV_Production - Grid_Export + Grid_Import + Battery_Discharge - Battery_Charge
+            # With signs: House_Load = PV - (-Grid) when exporting = PV + Grid
+            # NO! If exporting 5kW with 6kW PV, house = 1kW, so: House = PV - |Grid_Export| = 6 - 5 = 1 ✓
+            #
+            # Correct formula: House_Load = PV_Power + Battery_Power + Grid_Power
+            # Where Grid_Power sign convention: negative=export, positive=import
+            # - Exporting 5kW → Grid_Power = -5kW → House = 6 + 0 + (-5) = 1kW ✓
+            # - Importing 2kW → Grid_Power = 2kW → House = 3 + 0 + 2 = 5kW ✓
             
-            # House load calculation
-            data["total_house_load"] = max(0, pv_power + battery_power - grid_power)
+            pv_power = data.get("pv_power_total", 0)
+            battery_power = data.get("battery_power", 0)
+            grid_power = data.get("grid_power_total", 0)
+            
+            data["total_house_load"] = max(0, pv_power + battery_power + grid_power)
             
             # Current PV production (sum of all strings)
             data["current_pv_production"] = data.get("pv1_power", 0) + data.get("pv2_power", 0) + data.get("pv3_power", 0)

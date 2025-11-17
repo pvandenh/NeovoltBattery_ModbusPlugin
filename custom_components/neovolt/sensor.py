@@ -252,26 +252,6 @@ class NeovoltCalculatedSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the calculated state of the sensor."""
-        data = self.coordinator.data
-        
-        if self._key == "total_house_load":
-            # House Load = Grid Power + Battery Power + PV Power
-            # If grid power is negative (exporting), we subtract it
-            # Battery power positive = discharging (adds to house load)
-            # PV power is what's being produced
-            grid_power = data.get("grid_power_total", 0)
-            battery_power = data.get("battery_power", 0)
-            pv_power = data.get("pv_power_total", 0)
-            
-            # House load calculation
-            house_load = pv_power + battery_power - grid_power
-            return max(0, house_load)  # Don't show negative values
-            
-        elif self._key == "current_pv_production":
-            # Current PV production from all strings
-            pv1 = data.get("pv1_power", 0)
-            pv2 = data.get("pv2_power", 0)
-            pv3 = data.get("pv3_power", 0)
-            return pv1 + pv2 + pv3
-            
-        return None
+        # These sensors are pre-calculated in the coordinator
+        # Just return the value from coordinator data
+        return self.coordinator.data.get(self._key)
