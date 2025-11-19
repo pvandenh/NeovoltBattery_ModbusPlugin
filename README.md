@@ -5,6 +5,8 @@ Add "https://github.com/pvandenh/NeovoltBattery_ModbusPlugin" as a Custom repo t
 Search for "Neovolt Inverter".
 
 Then fill out the integration prompt.
+
+
 ![WhatsApp Image 2025-11-19 at 16 11 26_6ce1412b](https://github.com/user-attachments/assets/a0f49101-500b-4d91-8e92-181f2ca7761e)
 
 
