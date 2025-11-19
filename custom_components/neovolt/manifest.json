@@ -4,10 +4,10 @@
   "codeowners": ["CLAUDE"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/pvandenh/NeovoltBattery_ModbusPlugin",
+  "documentation": "https://github.com/pvandenh/Neovolt-Modbus",
   "iot_class": "local_polling",
   "requirements": ["pymodbus>=3.5.0"],
-  "version": "1.0.3",
+  "version": "1.1.0",
   "integration_type": "device",
   "loggers": ["custom_components.neovolt"]
 }

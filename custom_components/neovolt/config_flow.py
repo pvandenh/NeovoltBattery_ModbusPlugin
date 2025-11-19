@@ -8,12 +8,23 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, DEFAULT_PORT, DEFAULT_SLAVE_ID, CONF_SLAVE_ID
+from .const import (
+    DOMAIN, 
+    DEFAULT_PORT, 
+    DEFAULT_SLAVE_ID, 
+    CONF_SLAVE_ID,
+    CONF_MAX_CHARGE_POWER,
+    CONF_MAX_DISCHARGE_POWER,
+    DEFAULT_MAX_CHARGE_POWER,
+    DEFAULT_MAX_DISCHARGE_POWER,
+    MIN_POWER,
+    MAX_POWER_LIMIT,
+)
 from .modbus_client import NeovoltModbusClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,6 +34,14 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_HOST): cv.string,
         vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
         vol.Required(CONF_SLAVE_ID, default=DEFAULT_SLAVE_ID): cv.positive_int,
+        vol.Required(CONF_MAX_CHARGE_POWER, default=DEFAULT_MAX_CHARGE_POWER): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=MIN_POWER, max=MAX_POWER_LIMIT)
+        ),
+        vol.Required(CONF_MAX_DISCHARGE_POWER, default=DEFAULT_MAX_DISCHARGE_POWER): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=MIN_POWER, max=MAX_POWER_LIMIT)
+        ),
     }
 )
 
@@ -105,6 +124,65 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=STEP_USER_DATA_SCHEMA, 
             errors=errors,
             description_placeholders=description_placeholders,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> NeovoltOptionsFlowHandler:
+        """Get the options flow for this handler."""
+        return NeovoltOptionsFlowHandler(config_entry)
+
+
+class NeovoltOptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle options flow for Neovolt Inverter."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            # Update config entry data with new values
+            new_data = {**self.config_entry.data}
+            new_data[CONF_MAX_CHARGE_POWER] = user_input[CONF_MAX_CHARGE_POWER]
+            new_data[CONF_MAX_DISCHARGE_POWER] = user_input[CONF_MAX_DISCHARGE_POWER]
+            
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data=new_data,
+            )
+            
+            return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_MAX_CHARGE_POWER,
+                        default=self.config_entry.data.get(
+                            CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER
+                        ),
+                    ): vol.All(
+                        vol.Coerce(float), 
+                        vol.Range(min=MIN_POWER, max=MAX_POWER_LIMIT)
+                    ),
+                    vol.Required(
+                        CONF_MAX_DISCHARGE_POWER,
+                        default=self.config_entry.data.get(
+                            CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER
+                        ),
+                    ): vol.All(
+                        vol.Coerce(float), 
+                        vol.Range(min=MIN_POWER, max=MAX_POWER_LIMIT)
+                    ),
+                }
+            ),
         )
 
 

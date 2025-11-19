@@ -3,16 +3,20 @@
     "step": {
       "user": {
         "title": "Neovolt Solar Inverter",
-        "description": "Configure your Neovolt inverter Modbus TCP connection.\n\nMake sure your Modbus gateway (e.g., EW11A) is:\n- Connected to the same network as Home Assistant\n- Configured in TCP Server mode\n- Port 502 is open and accessible",
+        "description": "Configure your Neovolt inverter Modbus TCP connection.\n\nMake sure your Modbus gateway (e.g., EW11A) is:\n- Connected to the same network as Home Assistant\n- Configured in TCP Server mode\n- Port 502 is open and accessible\n\nFor parallel/master-slave setups, set the maximum power values to the total combined capacity of all inverters.",
         "data": {
           "host": "Host (IP Address)",
           "port": "Modbus TCP Port",
-          "slave_id": "Modbus Slave ID"
+          "slave_id": "Modbus Slave ID",
+          "max_charge_power": "Maximum Charge Power (kW)",
+          "max_discharge_power": "Maximum Discharge Power (kW)"
         },
         "data_description": {
           "host": "IP address of your Modbus TCP gateway (e.g., 192.168.1.100)",
           "port": "Usually 502 for Modbus TCP",
-          "slave_id": "Usually 85 (0x55) for Neovolt inverters"
+          "slave_id": "Usually 85 (0x55) for Neovolt inverters",
+          "max_charge_power": "Maximum charging power in kW. For parallel systems, enter total capacity (e.g., 15 for three 5kW units)",
+          "max_discharge_power": "Maximum discharging power in kW. For parallel systems, enter total capacity"
         }
       }
     },
@@ -22,6 +26,22 @@
     },
     "abort": {
       "already_configured": "This device is already configured. Check Devices & Services."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Neovolt Inverter Options",
+        "description": "Update power limits for your inverter system.\n\nFor parallel setups, enter the combined capacity of all inverters.\nChanges will take effect after reloading the integration.",
+        "data": {
+          "max_charge_power": "Maximum Charge Power (kW)",
+          "max_discharge_power": "Maximum Discharge Power (kW)"
+        },
+        "data_description": {
+          "max_charge_power": "Maximum charging power in kW. For parallel systems, enter total capacity",
+          "max_discharge_power": "Maximum discharging power in kW. For parallel systems, enter total capacity"
+        }
+      }
     }
   }
 }

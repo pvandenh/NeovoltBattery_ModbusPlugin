@@ -10,7 +10,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    CONF_MAX_CHARGE_POWER,
+    CONF_MAX_DISCHARGE_POWER,
+    DEFAULT_MAX_CHARGE_POWER,
+    DEFAULT_MAX_DISCHARGE_POWER,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,6 +30,10 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     client = hass.data[DOMAIN][entry.entry_id]["client"]
+    
+    # Get max power from config entry
+    max_charge_power = entry.data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
+    max_discharge_power = entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
     
     numbers = [
         # System Settings (write to Modbus)
@@ -43,12 +53,13 @@ async def async_setup_entry(
             4, 100, 1, PERCENTAGE, 0x0850, True
         ),
         
-        # Force Charging Controls (local storage, used by switch)
+        # Force Charging Controls (local storage, used by switch) - WITH DYNAMIC MAX
         NeovoltNumber(
             coordinator, device_info, client, hass,
             "force_charging_power", "Force Charging Power",
-            0.5, 5.0, 0.1, UnitOfPower.KILO_WATT, None, False,
-            default_value=3.0, icon="mdi:lightning-bolt"
+            0.5, max_charge_power, 0.1, UnitOfPower.KILO_WATT, None, False,
+            default_value=min(3.0, max_charge_power), icon="mdi:lightning-bolt",
+            config_entry=entry
         ),
         NeovoltNumber(
             coordinator, device_info, client, hass,
@@ -63,12 +74,13 @@ async def async_setup_entry(
             default_value=100, icon="mdi:battery-charging-100"
         ),
         
-        # Force Discharging Controls (local storage, used by switch)
+        # Force Discharging Controls (local storage, used by switch) - WITH DYNAMIC MAX
         NeovoltNumber(
             coordinator, device_info, client, hass,
             "force_discharging_power", "Force Discharging Power",
-            0.5, 5.0, 0.1, UnitOfPower.KILO_WATT, None, False,
-            default_value=3.0, icon="mdi:lightning-bolt-outline"
+            0.5, max_discharge_power, 0.1, UnitOfPower.KILO_WATT, None, False,
+            default_value=min(3.0, max_discharge_power), icon="mdi:lightning-bolt-outline",
+            config_entry=entry
         ),
         NeovoltNumber(
             coordinator, device_info, client, hass,
@@ -113,7 +125,8 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         address=None, 
         write_to_modbus=True,
         default_value=None,
-        icon=None
+        icon=None,
+        config_entry=None
     ):
         """Initialize the number entity."""
         super().__init__(coordinator)
@@ -122,6 +135,7 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         self._key = key
         self._address = address
         self._write_to_modbus = write_to_modbus
+        self._config_entry = config_entry
         self._attr_name = f"Neovolt Inverter {name}"
         self._attr_unique_id = f"neovolt_inverter_{key}"
         self._attr_native_min_value = min_val
@@ -137,6 +151,18 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         # Set default values for local settings
         if not write_to_modbus:
             self._local_value = default_value if default_value is not None else min_val
+
+    @property
+    def native_max_value(self) -> float:
+        """Return the maximum value (dynamically from config if applicable)."""
+        # Update max value from config entry for power settings
+        if self._config_entry and self._key in ["force_charging_power", "force_discharging_power"]:
+            config_key = CONF_MAX_CHARGE_POWER if "charging" in self._key else CONF_MAX_DISCHARGE_POWER
+            new_max = self._config_entry.data.get(config_key, self._attr_native_max_value)
+            if new_max != self._attr_native_max_value:
+                _LOGGER.info(f"Updated max value for {self._key} to {new_max} kW")
+                self._attr_native_max_value = new_max
+        return self._attr_native_max_value
 
     @property
     def native_value(self):

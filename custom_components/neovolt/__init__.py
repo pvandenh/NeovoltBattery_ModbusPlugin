@@ -28,12 +28,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = NeovoltDataUpdateCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
-    # Create device info
+    # Create device info - removed specific model
     device_info = DeviceInfo(
         identifiers={(DOMAIN, f"{entry.data['host']}_{entry.data['slave_id']}")},
         name="Neovolt Inverter",
         manufacturer="Bytewatt Technology Co., Ltd",
-        model="BW-INV-SPB5k",
+        model="Neovolt Hybrid Inverter",  # Generic model name
         sw_version=coordinator.data.get("ems_version"),
         configuration_url=f"http://{entry.data['host']}",
     )
@@ -49,6 +49,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    
+    # Setup options update listener
+    entry.async_on_unload(entry.add_update_listener(update_listener))
 
     return True
 
@@ -59,3 +62,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
+
+
+async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
