@@ -337,7 +337,7 @@ MIT License - Feel free to use, modify, and share!
 ## 👏 Credits
 
 - Based on Bytewatt Modbus RTU Protocol V1.12
-- Integration developed for the Home Assistant community, assisted by Claude.io
+- Integration developed for the Home Assistant community, assisted by Claude.ai
 - Thanks to all contributors and testers!
 
 ---
