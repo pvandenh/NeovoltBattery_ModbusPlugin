@@ -2,7 +2,8 @@
 
 A Home Assistant custom integration for Neovolt/Bytewatt inverters and battery systems using Modbus TCP protocol.
 
-![Neovolt Logo](https://raw.githubusercontent.com/pvandenh/NeovoltBattery_ModbusPlugin/main/logo.png)
+<img width="225" height="80" alt="image" src="https://github.com/user-attachments/assets/fd21d47f-ff23-44cb-bd60-02c9f13d0f06" />
+
 
 ## 🎯 What Does This Do?
 
