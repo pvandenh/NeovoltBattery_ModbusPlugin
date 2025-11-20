@@ -115,7 +115,7 @@ If you haven't connected your EW11A converter yet:
      ```
      ping 192.168.1.100
      ```
-
+For a more details guide to the EW11A installation and setup, download and follow this guide : http://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/Neovolt_Modbus%20initial%20hardware%20setup.docx
 ---
 
 ## ✨ Features
