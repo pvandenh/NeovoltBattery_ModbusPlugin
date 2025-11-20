@@ -34,6 +34,9 @@ Perfect for monitoring your battery system and creating smart automations to sav
 
 ## 📦 Installation
 
+### Prep : Initial modbus hardware setup
+Download and follow this setup guide for the physical connection of modbus : [Neovolt_Modbus initial hardware setup.docx](http://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/Neovolt_Modbus%20initial%20hardware%20setup.docx)
+
 ### Step 1: Add Custom Repository to HACS
 
 1. Open Home Assistant
