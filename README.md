@@ -35,7 +35,8 @@ Perfect for monitoring your battery system and creating smart automations to sav
 ## 📦 Installation
 
 ### Prep : Initial modbus hardware setup
-Download and follow this setup guide for the physical connection of modbus : [Neovolt_Modbus initial hardware setup.docx](http://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/Neovolt_Modbus%20initial%20hardware%20setup.docx)
+Download and follow this setup guide for the physical connection of modbus : https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/custom_components/neovolt/Neovolt_Modbus%20initial%20hardware%20setup.docx
+
 
 ### Step 1: Add Custom Repository to HACS
 
@@ -48,7 +49,8 @@ Download and follow this setup guide for the physical connection of modbus : [Ne
    - **Category**: Select **Integration**
 6. Click **ADD**
 
-### Step 2: Install the Integration
+### Step 2: Install the 
+Integration
 
 1. In HACS, click **Integrations**
 2. Click the **+ EXPLORE & DOWNLOAD REPOSITORIES** button
@@ -93,7 +95,7 @@ Your integration is now set up! You'll see a new device called "Neovolt Inverter
 ---
 
 ## 🔌 Hardware Setup (EW11A Modbus Converter)
-NOTE : For a more detailed guide to the EW11A installation and setup, download and follow this guide instead : http://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/Neovolt_Modbus%20initial%20hardware%20setup.docx
+NOTE : For a more detailed guide to the EW11A installation and setup, download and follow this guide instead : https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/custom_components/neovolt/Neovolt_Modbus%20initial%20hardware%20setup.docx
 
 If you haven't connected your EW11A converter yet:
 
