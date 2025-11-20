@@ -1,0 +1,10 @@
+{
+  "name": "Neovolt Solar Inverter",
+  "content_in_root": false,
+  "filename": "neovolt",
+  "render_readme": true,
+  "domains": ["neovolt"],
+  "homeassistant": "2023.1.0",
+  "iot_class": "Local Polling"
+}
+```
