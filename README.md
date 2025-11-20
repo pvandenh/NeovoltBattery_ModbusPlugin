@@ -93,6 +93,7 @@ Your integration is now set up! You'll see a new device called "Neovolt Inverter
 ---
 
 ## 🔌 Hardware Setup (EW11A Modbus Converter)
+NOTE : For a more detailed guide to the EW11A installation and setup, download and follow this guide instead : http://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/Neovolt_Modbus%20initial%20hardware%20setup.docx
 
 If you haven't connected your EW11A converter yet:
 
@@ -115,7 +116,7 @@ If you haven't connected your EW11A converter yet:
      ```
      ping 192.168.1.100
      ```
-For a more details guide to the EW11A installation and setup, download and follow this guide : http://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/Neovolt_Modbus%20initial%20hardware%20setup.docx
+
 ---
 
 ## ✨ Features
