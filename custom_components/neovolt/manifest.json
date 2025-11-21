@@ -1,5 +1,5 @@
 {
-  "domain": "custom_templates",
+  "domain": "neovolt",
   "name": "Neovolt Inverter",
   "codeowners": ["CLAUDE"],
   "config_flow": true,
