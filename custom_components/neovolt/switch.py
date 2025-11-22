@@ -24,6 +24,44 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -> float:
+    """
+    Safely retrieve a float value from a Home Assistant entity.
+
+    Args:
+        hass: Home Assistant instance
+        entity_id: Entity ID to retrieve
+        default: Default value if entity unavailable or invalid
+
+    Returns:
+        Float value from entity state, or default if unavailable/invalid
+    """
+    try:
+        entity = hass.states.get(entity_id)
+        if not entity:
+            _LOGGER.debug(f"Entity {entity_id} not found, using default: {default}")
+            return default
+
+        state = entity.state
+        if state in ("unknown", "unavailable", "None", None):
+            _LOGGER.debug(f"Entity {entity_id} state is {state}, using default: {default}")
+            return default
+
+        value = float(state)
+        return value
+
+    except (ValueError, TypeError) as e:
+        _LOGGER.warning(
+            f"Failed to convert entity {entity_id} state to float: {e}. Using default: {default}"
+        )
+        return default
+    except Exception as e:
+        _LOGGER.error(
+            f"Unexpected error retrieving entity {entity_id}: {e}. Using default: {default}"
+        )
+        return default
+
+
 def soc_percent_to_register(soc_percent: float) -> int:
     """
     Convert SOC percentage (0-100%) to register value (0-255) with bounds checking.
@@ -93,19 +131,28 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs):
         """Turn on force charging."""
         try:
-            # Get charging power from number entity if available
-            power_entity = self._hass.states.get("number.neovolt_inverter_force_charging_power")
-            power = float(power_entity.state) if power_entity else 3.0
+            # Get charging power from number entity (default: 3.0 kW)
+            power = safe_get_entity_float(
+                self._hass,
+                "number.neovolt_inverter_force_charging_power",
+                3.0
+            )
             power_watts = int(power * 1000)
 
-            # Get duration from number entity if available
-            duration_entity = self._hass.states.get("number.neovolt_inverter_force_charging_duration")
-            duration = int(float(duration_entity.state)) if duration_entity else 120
+            # Get duration from number entity (default: 120 minutes)
+            duration = int(safe_get_entity_float(
+                self._hass,
+                "number.neovolt_inverter_force_charging_duration",
+                120.0
+            ))
             duration_seconds = duration * 60
 
-            # Get SOC target from number entity if available
-            soc_entity = self._hass.states.get("number.neovolt_inverter_charging_soc_target")
-            soc_target = int(float(soc_entity.state)) if soc_entity else 100
+            # Get SOC target from number entity (default: 100%)
+            soc_target = int(safe_get_entity_float(
+                self._hass,
+                "number.neovolt_inverter_charging_soc_target",
+                100.0
+            ))
             soc_value = soc_percent_to_register(soc_target)
 
             # Prepare dispatch registers
@@ -164,19 +211,28 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs):
         """Turn on force discharging."""
         try:
-            # Get discharging power from number entity if available
-            power_entity = self._hass.states.get("number.neovolt_inverter_force_discharging_power")
-            power = float(power_entity.state) if power_entity else 3.0
+            # Get discharging power from number entity (default: 3.0 kW)
+            power = safe_get_entity_float(
+                self._hass,
+                "number.neovolt_inverter_force_discharging_power",
+                3.0
+            )
             power_watts = int(power * 1000)
 
-            # Get duration from number entity if available
-            duration_entity = self._hass.states.get("number.neovolt_inverter_force_discharging_duration")
-            duration = int(float(duration_entity.state)) if duration_entity else 120
+            # Get duration from number entity (default: 120 minutes)
+            duration = int(safe_get_entity_float(
+                self._hass,
+                "number.neovolt_inverter_force_discharging_duration",
+                120.0
+            ))
             duration_seconds = duration * 60
 
-            # Get SOC cutoff from number entity if available
-            soc_entity = self._hass.states.get("number.neovolt_inverter_discharging_soc_cutoff")
-            soc_cutoff = int(float(soc_entity.state)) if soc_entity else 20
+            # Get SOC cutoff from number entity (default: 20%)
+            soc_cutoff = int(safe_get_entity_float(
+                self._hass,
+                "number.neovolt_inverter_discharging_soc_cutoff",
+                20.0
+            ))
             soc_value = soc_percent_to_register(soc_cutoff)
 
             values = [
@@ -241,9 +297,12 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs):
         """Turn on prevent solar charging mode."""
         try:
-            # Get duration from number entity if available
-            duration_entity = self._hass.states.get("number.neovolt_inverter_prevent_solar_charging_duration")
-            duration = int(float(duration_entity.state)) if duration_entity else 480
+            # Get duration from number entity (default: 480 minutes = 8 hours)
+            duration = int(safe_get_entity_float(
+                self._hass,
+                "number.neovolt_inverter_prevent_solar_charging_duration",
+                480.0
+            ))
             duration_seconds = duration * 60
 
             # Get current SOC to use as cutoff (prevent discharge below current level)
