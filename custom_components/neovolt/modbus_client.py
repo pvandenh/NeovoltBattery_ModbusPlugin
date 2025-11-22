@@ -194,6 +194,9 @@ class NeovoltModbusClient:
             List of register values or None on error
         """
         def _read_operation():
+            # Lock is held only during connection check to avoid blocking during I/O
+            # pymodbus client itself is thread-safe for concurrent reads/writes
+            # We only need to protect the connection state check/establishment
             with self._lock:
                 if not self.client or not self.client.connected:
                     if not self.connect():
@@ -201,6 +204,7 @@ class NeovoltModbusClient:
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
 
+            # I/O operation performed outside lock to allow concurrent operations
             result = self.client.read_holding_registers(
                 address=address,
                 count=count,
@@ -227,6 +231,7 @@ class NeovoltModbusClient:
             True if successful, False otherwise
         """
         def _write_operation():
+            # Lock held only during connection check (see read_holding_registers for rationale)
             with self._lock:
                 if not self.client or not self.client.connected:
                     if not self.connect():
@@ -234,6 +239,7 @@ class NeovoltModbusClient:
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
 
+            # I/O operation performed outside lock to allow concurrent operations
             result = self.client.write_register(
                 address=address,
                 value=value,
@@ -262,6 +268,7 @@ class NeovoltModbusClient:
             True if successful, False otherwise
         """
         def _write_operation():
+            # Lock held only during connection check (see read_holding_registers for rationale)
             with self._lock:
                 if not self.client or not self.client.connected:
                     if not self.connect():
@@ -269,6 +276,7 @@ class NeovoltModbusClient:
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
 
+            # I/O operation performed outside lock to allow concurrent operations
             result = self.client.write_registers(
                 address=address,
                 values=values,

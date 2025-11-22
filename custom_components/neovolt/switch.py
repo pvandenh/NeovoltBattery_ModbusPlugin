@@ -284,14 +284,15 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self):
         """Return if switch is on."""
-        # Check if we're in a discharge mode with minimal power (prevents charging)
+        # Check if we're in prevent solar charging mode
         data = self.coordinator.data
         dispatch_start = data.get("dispatch_start", 0)
         dispatch_power = data.get("dispatch_power", 0)
-        
-        # We're active if dispatch is on and power is at our "prevent charging" level (small discharge)
-        # Using 50W discharge as the "prevent charging" marker
-        return dispatch_start == 1 and 0 < dispatch_power <= 100
+
+        # We set prevent charging mode to exactly 50W discharge
+        # Use exact match to avoid false positives from other discharge modes
+        PREVENT_CHARGING_POWER = 50  # Must match value in async_turn_on
+        return dispatch_start == 1 and dispatch_power == PREVENT_CHARGING_POWER
 
     async def async_turn_on(self, **kwargs):
         """Turn on prevent solar charging mode."""
