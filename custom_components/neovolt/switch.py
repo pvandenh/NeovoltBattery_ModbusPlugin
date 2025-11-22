@@ -9,9 +9,47 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import (
+    DISPATCH_MODE_POWER_WITH_SOC,
+    DISPATCH_RESET_VALUES,
+    DOMAIN,
+    MAX_SOC_PERCENT,
+    MAX_SOC_REGISTER,
+    MIN_SOC_PERCENT,
+    MIN_SOC_REGISTER,
+    MODBUS_OFFSET,
+    SOC_CONVERSION_FACTOR,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def soc_percent_to_register(soc_percent: float) -> int:
+    """
+    Convert SOC percentage (0-100%) to register value (0-255) with bounds checking.
+
+    Args:
+        soc_percent: State of charge as percentage (0-100)
+
+    Returns:
+        Register value (0-255)
+
+    Raises:
+        ValueError: If SOC percentage is out of valid range
+    """
+    if not MIN_SOC_PERCENT <= soc_percent <= MAX_SOC_PERCENT:
+        raise ValueError(
+            f"SOC percentage {soc_percent}% is out of valid range "
+            f"({MIN_SOC_PERCENT}-{MAX_SOC_PERCENT}%)"
+        )
+
+    # Convert to register value
+    register_value = int(soc_percent / SOC_CONVERSION_FACTOR)
+
+    # Clamp to valid register range as safety measure
+    register_value = max(MIN_SOC_REGISTER, min(MAX_SOC_REGISTER, register_value))
+
+    return register_value
 
 
 async def async_setup_entry(
@@ -59,32 +97,32 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
             power_entity = self._hass.states.get("number.neovolt_inverter_force_charging_power")
             power = float(power_entity.state) if power_entity else 3.0
             power_watts = int(power * 1000)
-            
+
             # Get duration from number entity if available
             duration_entity = self._hass.states.get("number.neovolt_inverter_force_charging_duration")
             duration = int(float(duration_entity.state)) if duration_entity else 120
             duration_seconds = duration * 60
-            
+
             # Get SOC target from number entity if available
             soc_entity = self._hass.states.get("number.neovolt_inverter_charging_soc_target")
             soc_target = int(float(soc_entity.state)) if soc_entity else 100
-            soc_value = int(soc_target / 0.392157)  # Convert percentage to raw value
-            
+            soc_value = soc_percent_to_register(soc_target)
+
             # Prepare dispatch registers
             values = [
-                1,                      # Dispatch start
-                0,                      # Power high byte
-                32000 - power_watts,    # Power low byte (negative for charging)
-                0,                      # Reactive power high
-                32000,                  # Reactive power low (no reactive power)
-                2,                      # Mode: SOC control
-                soc_value,              # SOC target
-                0,                      # Time high byte
-                duration_seconds,       # Time low byte (safety timeout)
+                1,                              # Dispatch start
+                0,                              # Power high byte
+                MODBUS_OFFSET - power_watts,    # Power low byte (negative for charging)
+                0,                              # Reactive power high
+                MODBUS_OFFSET,                  # Reactive power low (no reactive power)
+                DISPATCH_MODE_POWER_WITH_SOC,   # Mode: SOC control
+                soc_value,                      # SOC target
+                0,                              # Time high byte
+                duration_seconds,               # Time low byte (safety timeout)
             ]
-            
+
             _LOGGER.info(f"Starting force charging: {power}kW, target SOC {soc_target}%, timeout {duration}min")
-            
+
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, values
             )
@@ -96,9 +134,8 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
         """Turn off force charging."""
         try:
             _LOGGER.info("Stopping force charging")
-            values = [0, 0, 32000, 0, 32000, 0, 0, 0, 90]
             await self._hass.async_add_executor_job(
-                self._client.write_registers, 0x0880, values
+                self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
             await self.coordinator.async_request_refresh()
         except Exception as e:
@@ -131,31 +168,31 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
             power_entity = self._hass.states.get("number.neovolt_inverter_force_discharging_power")
             power = float(power_entity.state) if power_entity else 3.0
             power_watts = int(power * 1000)
-            
+
             # Get duration from number entity if available
             duration_entity = self._hass.states.get("number.neovolt_inverter_force_discharging_duration")
             duration = int(float(duration_entity.state)) if duration_entity else 120
             duration_seconds = duration * 60
-            
+
             # Get SOC cutoff from number entity if available
             soc_entity = self._hass.states.get("number.neovolt_inverter_discharging_soc_cutoff")
             soc_cutoff = int(float(soc_entity.state)) if soc_entity else 20
-            soc_value = int(soc_cutoff / 0.392157)  # Convert percentage to raw value
-            
+            soc_value = soc_percent_to_register(soc_cutoff)
+
             values = [
-                1,                      # Dispatch start
-                0,                      # Power high byte
-                32000 + power_watts,    # Power low byte (positive for discharging)
-                0,                      # Reactive power high
-                32000,                  # Reactive power low (no reactive power)
-                2,                      # Mode: SOC control
-                soc_value,              # SOC cutoff
-                0,                      # Time high byte
-                duration_seconds,       # Time low byte (safety timeout)
+                1,                              # Dispatch start
+                0,                              # Power high byte
+                MODBUS_OFFSET + power_watts,    # Power low byte (positive for discharging)
+                0,                              # Reactive power high
+                MODBUS_OFFSET,                  # Reactive power low (no reactive power)
+                DISPATCH_MODE_POWER_WITH_SOC,   # Mode: SOC control
+                soc_value,                      # SOC cutoff
+                0,                              # Time high byte
+                duration_seconds,               # Time low byte (safety timeout)
             ]
-            
+
             _LOGGER.info(f"Starting force discharging: {power}kW, cutoff SOC {soc_cutoff}%, timeout {duration}min")
-            
+
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, values
             )
@@ -167,9 +204,8 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
         """Turn off force discharging."""
         try:
             _LOGGER.info("Stopping force discharging")
-            values = [0, 0, 32000, 0, 32000, 0, 0, 0, 90]
             await self._hass.async_add_executor_job(
-                self._client.write_registers, 0x0880, values
+                self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
             await self.coordinator.async_request_refresh()
         except Exception as e:
@@ -209,31 +245,32 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
             duration_entity = self._hass.states.get("number.neovolt_inverter_prevent_solar_charging_duration")
             duration = int(float(duration_entity.state)) if duration_entity else 480
             duration_seconds = duration * 60
-            
+
             # Get current SOC to use as cutoff (prevent discharge below current level)
             current_soc = self.coordinator.data.get("battery_soc", 20)
             soc_cutoff = max(int(current_soc) - 2, 10)  # 2% buffer, minimum 10%
-            soc_value = int(soc_cutoff / 0.392157)  # Convert percentage to raw value
-            
+            soc_value = soc_percent_to_register(soc_cutoff)
+
             # Set a very small discharge power (50W) to prevent charging
             # This effectively tells the inverter to slightly discharge, preventing any charging
+            # Hardware constraint: 50W is minimum reliable discharge power for this inverter
             prevent_charging_power = 50  # 50W minimal discharge
-            
+
             values = [
-                1,                              # Dispatch start
-                0,                              # Power high byte
-                32000 + prevent_charging_power, # Power low byte (tiny positive = prevent charging)
-                0,                              # Reactive power high
-                32000,                          # Reactive power low (no reactive power)
-                2,                              # Mode: SOC control (stops at cutoff)
-                soc_value,                      # SOC cutoff (current - 2%)
-                0,                              # Time high byte
-                duration_seconds,               # Time low byte (duration)
+                1,                                      # Dispatch start
+                0,                                      # Power high byte
+                MODBUS_OFFSET + prevent_charging_power, # Power low byte (tiny positive = prevent charging)
+                0,                                      # Reactive power high
+                MODBUS_OFFSET,                          # Reactive power low (no reactive power)
+                DISPATCH_MODE_POWER_WITH_SOC,           # Mode: SOC control (stops at cutoff)
+                soc_value,                              # SOC cutoff (current - 2%)
+                0,                                      # Time high byte
+                duration_seconds,                       # Time low byte (duration)
             ]
-            
+
             _LOGGER.info(f"Enabling prevent solar charging mode for {duration} minutes (SOC cutoff: {soc_cutoff}%)")
             _LOGGER.debug(f"Current battery SOC: {current_soc}%, preventing charge with 50W discharge command")
-            
+
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, values
             )
@@ -245,9 +282,8 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
         """Turn off prevent solar charging mode (return to normal operation)."""
         try:
             _LOGGER.info("Disabling prevent solar charging mode (returning to normal operation)")
-            values = [0, 0, 32000, 0, 32000, 0, 0, 0, 90]
             await self._hass.async_add_executor_job(
-                self._client.write_registers, 0x0880, values
+                self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
             await self.coordinator.async_request_refresh()
         except Exception as e:
