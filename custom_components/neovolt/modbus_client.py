@@ -130,12 +130,12 @@ class NeovoltModbusClient:
             )
             connected = self.client.connect()
             if connected:
-                _LOGGER.info(f"Successfully connected to {self.host}:{self.port}")
+                _LOGGER.info(f"Connected to Modbus device at {self.host}:{self.port}")
             else:
-                _LOGGER.error(f"Failed to connect to {self.host}:{self.port}")
+                _LOGGER.error(f"Failed to connect to Modbus device at {self.host}:{self.port}")
             return connected
         except Exception as e:
-            _LOGGER.error(f"Connection error: {e}")
+            _LOGGER.error(f"Connection error for {self.host}:{self.port}: {e}")
             return False
     
     def test_connection(self):

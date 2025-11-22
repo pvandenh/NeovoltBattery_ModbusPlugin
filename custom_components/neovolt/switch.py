@@ -280,7 +280,6 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_unique_id = "neovolt_inverter_prevent_solar_charging"
         self._attr_icon = "mdi:battery-lock"
         self._attr_device_info = device_info
-        self._is_active = False
 
     @property
     def is_on(self):
