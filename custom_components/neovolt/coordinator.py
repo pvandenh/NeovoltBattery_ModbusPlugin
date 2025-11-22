@@ -51,7 +51,15 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
     def _fetch_data(self):
         """Fetch data from Modbus (runs in executor)."""
         data = {}
-        
+
+        # Track which critical register blocks were successfully read
+        # Used to ensure data consistency for calculated values
+        successful_reads = {
+            "grid": False,
+            "pv": False,
+            "battery": False,
+        }
+
         try:
             # Grid data (0x0010-0x0036) - Using YAML addresses
             grid_regs = self.client.read_holding_registers(0x0010, 39)
@@ -80,6 +88,9 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 data["grid_power_total"] = self._to_signed_32(grid_regs[17], grid_regs[18])
                 # 0x0036: Grid Power Factor (signed, scale 0.01)
                 data["grid_power_factor"] = self._to_signed(grid_regs[38]) * 0.01
+                successful_reads["grid"] = True
+            else:
+                _LOGGER.warning("Failed to read grid registers - grid data unavailable")
 
             # PV data (0x0090-0x00A3)
             pv_regs = self.client.read_holding_registers(0x0090, 20)
@@ -90,6 +101,9 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 data["pv_voltage_a"] = pv_regs[4]
                 # 0x00A1-0x00A2: PV Total Active Power (int32, no scaling)
                 data["pv_power_total"] = self._to_signed_32(pv_regs[17], pv_regs[18])
+                successful_reads["pv"] = True
+            else:
+                _LOGGER.warning("Failed to read PV registers - PV data unavailable")
 
             # Battery data (0x0100-0x0127)
             battery_regs = self.client.read_holding_registers(0x0100, 40)
@@ -118,6 +132,9 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 data["battery_discharge_energy"] = self._to_unsigned_32(battery_regs[34], battery_regs[35]) * 0.1
                 # 0x0126: Battery Power (signed, no scaling)
                 data["battery_power"] = self._to_signed(battery_regs[38])
+                successful_reads["battery"] = True
+            else:
+                _LOGGER.warning("Failed to read battery registers - battery data unavailable")
 
             # Inverter data (0x0500-0x056D)
             inv_regs = self.client.read_holding_registers(0x0500, 110)
@@ -175,47 +192,40 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 power_raw = self._to_unsigned_32(dispatch_regs[1], dispatch_regs[2])
                 data["dispatch_power"] = power_raw - 32000
 
-            # Calculate additional useful values
-            # House load calculation based on power flow
-            # Grid power: negative = exporting to grid, positive = importing from grid
-            # Battery power: positive = discharging to house, negative = charging from system
-            # PV power: always positive (what solar produces)
+            # Calculate house load only if we have all critical data
+            # House load calculation based on power flow:
+            # Formula: House_Load = PV_Power + Battery_Power + Grid_Power
+            # Where:
+            # - Grid_Power: negative=export, positive=import
+            # - Battery_Power: positive=discharge, negative=charge
+            # - PV_Power: always positive (production)
             #
-            # Energy balance: PV + Battery - Grid = House Load
-            # - If Grid is negative (exporting), we subtract negative (adds back)
-            # - If Grid is positive (importing), we subtract it
-            # 
-            # Example 1: PV=6kW, Grid=-6kW (export), Batt=0 → House = 6-(-6)+0 = 12kW ❌
-            # That's wrong! Let's reconsider...
-            #
-            # Correct logic:
-            # PV generates power → splits to → House + Battery + Grid
-            # So: PV = House + Battery_Charge + Grid_Export
-            # Therefore: House = PV - Battery_Charge - Grid_Export
-            #
-            # With signed conventions:
-            # - Battery_Power: positive=discharge (from battery), negative=charge (to battery)
-            # - Grid_Power: positive=import (from grid), negative=export (to grid)
-            #
-            # House = PV + Battery_Discharge - Battery_Charge - Grid_Export + Grid_Import
-            # House = PV + Battery_Power - (-Grid_Export) + Grid_Import
-            # House = PV + Battery_Power + Grid_Export (when grid negative)
-            #
-            # Wait, let's use actual power flow:
-            # House_Load = PV_Production - Grid_Export + Grid_Import + Battery_Discharge - Battery_Charge
-            # With signs: House_Load = PV - (-Grid) when exporting = PV + Grid
-            # NO! If exporting 5kW with 6kW PV, house = 1kW, so: House = PV - |Grid_Export| = 6 - 5 = 1 ✓
-            #
-            # Correct formula: House_Load = PV_Power + Battery_Power + Grid_Power
-            # Where Grid_Power sign convention: negative=export, positive=import
-            # - Exporting 5kW → Grid_Power = -5kW → House = 6 + 0 + (-5) = 1kW ✓
-            # - Importing 2kW → Grid_Power = 2kW → House = 3 + 0 + 2 = 5kW ✓
-            
-            pv_power = data.get("pv_power_total", 0)
-            battery_power = data.get("battery_power", 0)
-            grid_power = data.get("grid_power_total", 0)
-            
-            data["total_house_load"] = max(0, pv_power + battery_power + grid_power)
+            # Examples:
+            # - Exporting 5kW with 6kW PV: House = 6 + 0 + (-5) = 1kW ✓
+            # - Importing 2kW with 3kW PV: House = 3 + 0 + 2 = 5kW ✓
+
+            if all([successful_reads["pv"], successful_reads["battery"], successful_reads["grid"]]):
+                pv_power = data.get("pv_power_total", 0)
+                battery_power = data.get("battery_power", 0)
+                grid_power = data.get("grid_power_total", 0)
+
+                house_load = pv_power + battery_power + grid_power
+
+                # Validate calculation - negative house load indicates error
+                if house_load < 0:
+                    _LOGGER.warning(
+                        f"House load calculation resulted in negative value ({house_load}W). "
+                        f"PV={pv_power}W, Battery={battery_power}W, Grid={grid_power}W. "
+                        "This may indicate a sensor reading error."
+                    )
+                    data["total_house_load"] = None
+                else:
+                    data["total_house_load"] = house_load
+            else:
+                # Don't calculate house load if we're missing critical data
+                # This prevents showing misleading 0W when data is actually unavailable
+                _LOGGER.debug("Insufficient data for house load calculation - setting to None")
+                data["total_house_load"] = None
             
             # Current PV production (sum of all strings)
             data["current_pv_production"] = data.get("pv1_power", 0) + data.get("pv2_power", 0) + data.get("pv3_power", 0)
