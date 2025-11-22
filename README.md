@@ -25,8 +25,9 @@ Perfect for monitoring your battery system and creating smart automations to sav
 - ✅ Home Assistant installed and running
 
 ### Software
-- ✅ Home Assistant 2023.1 or newer
+- ✅ Home Assistant 2025.1 or newer
 - ✅ HACS (Home Assistant Community Store) installed
+- ✅ pymodbus version 3.10.0 or higher
 
 **Don't have HACS?** Install it first: https://hacs.xyz/docs/setup/download
 
