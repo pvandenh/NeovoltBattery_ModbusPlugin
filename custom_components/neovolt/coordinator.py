@@ -203,6 +203,12 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             # Examples:
             # - Exporting 5kW with 6kW PV: House = 6 + 0 + (-5) = 1kW ✓
             # - Importing 2kW with 3kW PV: House = 3 + 0 + 2 = 5kW ✓
+            #
+            # Note: In multi-inverter systems where the grid meter measures system-wide
+            # power but Modbus only monitors the host inverter, negative house load is
+            # valid and indicates excess export from unmonitored inverters.
+            # Example: Host Battery=5kW, Grid=-7kW (both inverters), House=-2kW
+            # The -2kW represents power from the slave inverter not in this calculation.
 
             if all([successful_reads["pv"], successful_reads["battery"], successful_reads["grid"]]):
                 pv_power = data.get("pv_power_total", 0)
@@ -211,16 +217,19 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
                 house_load = pv_power + battery_power + grid_power
 
-                # Validate calculation - negative house load indicates error
+                # Handle negative house load (valid in multi-inverter systems)
                 if house_load < 0:
-                    _LOGGER.warning(
+                    _LOGGER.debug(
                         f"House load calculation resulted in negative value ({house_load}W). "
                         f"PV={pv_power}W, Battery={battery_power}W, Grid={grid_power}W. "
-                        "This may indicate a sensor reading error."
+                        "This is expected in multi-inverter setups where grid meter is system-wide."
                     )
-                    data["total_house_load"] = None
+                    data["total_house_load"] = house_load
+                    # Track excess export from unmonitored sources (e.g., slave inverter)
+                    data["excess_grid_export"] = abs(house_load)
                 else:
                     data["total_house_load"] = house_load
+                    data["excess_grid_export"] = 0
             else:
                 # Don't calculate house load if we're missing critical data
                 # This prevents showing misleading 0W when data is actually unavailable
