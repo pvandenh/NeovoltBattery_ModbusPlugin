@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, CONF_SLAVE_ID
 from .modbus_client import NeovoltModbusClient
@@ -33,6 +34,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             port=self.port,
             slave_id=self.slave_id,
         )
+
+        # Daily reset tracking
+        self._last_reset_date = None
+        self._pv_inverter_energy_at_midnight = None
 
         super().__init__(
             hass,
@@ -174,7 +179,11 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             pv_inv_regs = self.client.read_holding_registers(0x08D0, 2)
             if pv_inv_regs:
                 # 0x08D0-0x08D1: PV Inverter Energy (scale 0.01)
-                data["pv_inverter_energy"] = self._to_unsigned_32(pv_inv_regs[0], pv_inv_regs[1]) * 0.01
+                pv_inverter_total = self._to_unsigned_32(pv_inv_regs[0], pv_inv_regs[1]) * 0.01
+                data["pv_inverter_energy"] = pv_inverter_total
+                
+                # Calculate daily reset value
+                data["pv_inverter_energy_today"] = self._calculate_daily_pv_energy(pv_inverter_total)
 
             # Settings (0x0800-0x0855)
             settings_regs = self.client.read_holding_registers(0x0800, 86)
@@ -193,23 +202,6 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 data["dispatch_power"] = power_raw - 32000
 
             # Calculate house load only if we have all critical data
-            # House load calculation based on power flow:
-            # Formula: House_Load = PV_Power + Battery_Power + Grid_Power
-            # Where:
-            # - Grid_Power: negative=export, positive=import
-            # - Battery_Power: positive=discharge, negative=charge
-            # - PV_Power: always positive (production)
-            #
-            # Examples:
-            # - Exporting 5kW with 6kW PV: House = 6 + 0 + (-5) = 1kW ✓
-            # - Importing 2kW with 3kW PV: House = 3 + 0 + 2 = 5kW ✓
-            #
-            # Note: In multi-inverter systems where the grid meter measures system-wide
-            # power but Modbus only monitors the host inverter, negative house load is
-            # valid and indicates excess export from unmonitored inverters.
-            # Example: Host Battery=5kW, Grid=-7kW (both inverters), House=-2kW
-            # The -2kW represents power from the slave inverter not in this calculation.
-
             if all([successful_reads["pv"], successful_reads["battery"], successful_reads["grid"]]):
                 pv_power = data.get("pv_power_total", 0)
                 battery_power = data.get("battery_power", 0)
@@ -232,7 +224,6 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                     data["excess_grid_export"] = 0
             else:
                 # Don't calculate house load if we're missing critical data
-                # This prevents showing misleading 0W when data is actually unavailable
                 _LOGGER.debug("Insufficient data for house load calculation - setting to None")
                 data["total_house_load"] = None
             
@@ -245,6 +236,54 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.error(f"Error fetching data: {err}")
             raise
+
+    def _calculate_daily_pv_energy(self, total_energy: float) -> float:
+        """
+        Calculate daily PV inverter energy by resetting at midnight.
+        
+        Args:
+            total_energy: The lifetime total PV inverter energy in kWh
+            
+        Returns:
+            Today's PV inverter energy in kWh
+        """
+        now = dt_util.now()
+        current_date = now.date()
+        
+        # Check if we need to reset (new day)
+        if self._last_reset_date != current_date:
+            _LOGGER.info(
+                f"Daily PV inverter energy reset - New day detected. "
+                f"Previous date: {self._last_reset_date}, Current date: {current_date}"
+            )
+            # Store the total energy at midnight
+            self._pv_inverter_energy_at_midnight = total_energy
+            self._last_reset_date = current_date
+            
+            # First reading of the day = 0
+            return 0.0
+        
+        # Calculate energy since midnight
+        if self._pv_inverter_energy_at_midnight is not None:
+            daily_energy = total_energy - self._pv_inverter_energy_at_midnight
+            
+            # Handle counter rollover (unlikely but possible)
+            if daily_energy < 0:
+                _LOGGER.warning(
+                    f"PV inverter energy counter appears to have rolled over. "
+                    f"Total: {total_energy}, Midnight: {self._pv_inverter_energy_at_midnight}"
+                )
+                # Reset midnight baseline
+                self._pv_inverter_energy_at_midnight = total_energy
+                return 0.0
+                
+            return round(daily_energy, 2)
+        else:
+            # First run ever - establish baseline
+            _LOGGER.info(f"Establishing PV inverter energy baseline: {total_energy} kWh")
+            self._pv_inverter_energy_at_midnight = total_energy
+            self._last_reset_date = current_date
+            return 0.0
 
     @staticmethod
     def _to_signed(value):

@@ -209,6 +209,11 @@ async def async_setup_entry(
         NeovoltCalculatedSensor(coordinator, device_info, "current_pv_production", "Current PV Production",
                                UnitOfPower.WATT, SensorDeviceClass.POWER,
                                SensorStateClass.MEASUREMENT, "mdi:solar-power"),
+        
+        # Daily reset sensors
+        NeovoltDailyResetSensor(coordinator, device_info, "pv_inverter_energy_today", "PV Inverter Energy Today",
+                               UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
+                               "mdi:solar-power-variant-outline"),
     ]
     
     async_add_entities(sensors)
@@ -257,4 +262,25 @@ class NeovoltCalculatedSensor(CoordinatorEntity, SensorEntity):
         """Return the calculated state of the sensor."""
         # These sensors are pre-calculated in the coordinator
         # Just return the value from coordinator data
+        return self.coordinator.data.get(self._key)
+
+
+class NeovoltDailyResetSensor(CoordinatorEntity, SensorEntity):
+    """Representation of a daily reset sensor that tracks energy from midnight."""
+
+    def __init__(self, coordinator, device_info, key, name, unit, device_class, icon):
+        """Initialize the daily reset sensor."""
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_name = f"Neovolt Inverter {name}"
+        self._attr_unique_id = f"neovolt_inverter_{key}"
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_icon = icon
+        self._attr_device_info = device_info
+
+    @property
+    def native_value(self):
+        """Return the daily reset value from coordinator."""
         return self.coordinator.data.get(self._key)

@@ -64,7 +64,7 @@ async def async_setup_entry(
         NeovoltNumber(
             coordinator, device_info, client, hass,
             "force_charging_duration", "Force Charging Duration",
-            5, 480, 5, UnitOfTime.MINUTES, None, False,
+            1, 480, 1, UnitOfTime.MINUTES, None, False,
             default_value=120, icon="mdi:timer"
         ),
         NeovoltNumber(
@@ -85,7 +85,7 @@ async def async_setup_entry(
         NeovoltNumber(
             coordinator, device_info, client, hass,
             "force_discharging_duration", "Force Discharging Duration",
-            5, 480, 5, UnitOfTime.MINUTES, None, False,
+            1, 480, 1, UnitOfTime.MINUTES, None, False,
             default_value=120, icon="mdi:timer-outline"
         ),
         NeovoltNumber(
@@ -99,7 +99,7 @@ async def async_setup_entry(
         NeovoltNumber(
             coordinator, device_info, client, hass,
             "prevent_solar_charging_duration", "Prevent Solar Charging Duration",
-            15, 1440, 15, UnitOfTime.MINUTES, None, False,
+            1, 1440, 1, UnitOfTime.MINUTES, None, False,
             default_value=480, icon="mdi:timer-lock"
         ),
     ]
