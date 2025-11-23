@@ -62,11 +62,22 @@ class NeovoltTimePeriodControlSelect(CoordinatorEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
         try:
+            # Validate option before attempting to use it
+            if option not in self._attr_options:
+                _LOGGER.error(
+                    f"Invalid option '{option}' for time period control. "
+                    f"Valid options: {self._attr_options}"
+                )
+                return
+
             value = self._attr_options.index(option)
             _LOGGER.info(f"Setting time period control to: {option} (value: {value})")
             await self._hass.async_add_executor_job(
                 self._client.write_register, 0x084F, value
             )
             await self.coordinator.async_request_refresh()
+        except ValueError as e:
+            # This should not happen due to validation above, but handle defensively
+            _LOGGER.error(f"Option '{option}' not found in valid options: {e}")
         except Exception as e:
-            _LOGGER.error(f"Failed to set time period control: {e}")
+            _LOGGER.error(f"Failed to set time period control to '{option}': {e}")

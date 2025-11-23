@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DISPATCH_RESET_VALUES, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,9 +50,8 @@ class NeovoltDispatchResetButton(CoordinatorEntity, ButtonEntity):
         """Handle the button press."""
         try:
             _LOGGER.info("Resetting dispatch (stopping all force charge/discharge)")
-            values = [0, 0, 32000, 0, 32000, 0, 0, 0, 90]
             await self._hass.async_add_executor_job(
-                self._client.write_registers, 0x0880, values
+                self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
             await self.coordinator.async_request_refresh()
         except Exception as e:
@@ -76,9 +75,8 @@ class NeovoltStopChargingButton(CoordinatorEntity, ButtonEntity):
         """Handle the button press."""
         try:
             _LOGGER.info("Stopping force charging")
-            values = [0, 0, 32000, 0, 32000, 0, 0, 0, 90]
             await self._hass.async_add_executor_job(
-                self._client.write_registers, 0x0880, values
+                self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
             await self.coordinator.async_request_refresh()
         except Exception as e:
@@ -102,9 +100,8 @@ class NeovoltStopDischargingButton(CoordinatorEntity, ButtonEntity):
         """Handle the button press."""
         try:
             _LOGGER.info("Stopping force discharging")
-            values = [0, 0, 32000, 0, 32000, 0, 0, 0, 90]
             await self._hass.async_add_executor_job(
-                self._client.write_registers, 0x0880, values
+                self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
             await self.coordinator.async_request_refresh()
         except Exception as e:

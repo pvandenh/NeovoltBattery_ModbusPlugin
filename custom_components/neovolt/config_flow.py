@@ -102,8 +102,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 info = await validate_input(self.hass, user_input)
                 
                 # Set unique ID to prevent duplicate entries
+                # Include port to allow multiple Modbus gateways on same IP (different ports)
                 await self.async_set_unique_id(
-                    f"{user_input[CONF_HOST]}_{user_input[CONF_SLAVE_ID]}"
+                    f"{user_input[CONF_HOST]}_{user_input[CONF_PORT]}_{user_input[CONF_SLAVE_ID]}"
                 )
                 self._abort_if_unique_id_configured()
                 
