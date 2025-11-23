@@ -8,6 +8,16 @@ DEFAULT_SLAVE_ID = 85
 
 CONF_SLAVE_ID = "slave_id"
 
+# Multi-inverter configuration
+CONF_NUM_INVERTERS = "num_inverters"
+CONF_INVERTER_NAME = "inverter_name"
+CONF_INVERTERS = "inverters"
+CONF_MASTER = "master"
+CONF_SLAVES = "slaves"
+DEFAULT_INVERTER_NAME = "Inverter"
+MIN_INVERTERS = 1
+MAX_INVERTERS = 6
+
 # Max power configuration
 CONF_MAX_CHARGE_POWER = "max_charge_power"
 CONF_MAX_DISCHARGE_POWER = "max_discharge_power"

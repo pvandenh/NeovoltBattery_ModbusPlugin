@@ -16,6 +16,7 @@ from .const import (
     CONF_MAX_DISCHARGE_POWER,
     DEFAULT_MAX_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
+    CONF_MASTER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,11 +30,20 @@ async def async_setup_entry(
     """Set up Neovolt numbers."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
-    client = hass.data[DOMAIN][entry.entry_id]["client"]
-    
-    # Get max power from config entry
-    max_charge_power = entry.data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
-    max_discharge_power = entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
+    is_multi_inverter = hass.data[DOMAIN][entry.entry_id].get("is_multi_inverter", False)
+
+    # Get the client (master client in multi-inverter setups)
+    if is_multi_inverter:
+        client = hass.data[DOMAIN][entry.entry_id]["clients"][0]  # Master client
+        # Get max power from master config
+        master_data = entry.data.get(CONF_MASTER, {})
+        max_charge_power = master_data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
+        max_discharge_power = master_data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
+    else:
+        client = hass.data[DOMAIN][entry.entry_id]["client"]
+        # Get max power from config entry
+        max_charge_power = entry.data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
+        max_discharge_power = entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
     
     numbers = [
         # System Settings (write to Modbus)

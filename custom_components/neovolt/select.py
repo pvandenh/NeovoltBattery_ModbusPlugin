@@ -22,12 +22,19 @@ async def async_setup_entry(
     """Set up Neovolt selects."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
-    client = hass.data[DOMAIN][entry.entry_id]["client"]
-    
+    is_multi_inverter = hass.data[DOMAIN][entry.entry_id].get("is_multi_inverter", False)
+
+    # Get the client (master client in multi-inverter setups)
+    if is_multi_inverter:
+        client = hass.data[DOMAIN][entry.entry_id]["clients"][0]  # Master client
+    else:
+        client = hass.data[DOMAIN][entry.entry_id]["client"]
+
+    # Only create selects for master inverter (controls are master-only)
     selects = [
         NeovoltTimePeriodControlSelect(coordinator, device_info, client, hass),
     ]
-    
+
     async_add_entities(selects)
 
 

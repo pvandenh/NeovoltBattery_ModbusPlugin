@@ -98,14 +98,21 @@ async def async_setup_entry(
     """Set up Neovolt switches."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
-    client = hass.data[DOMAIN][entry.entry_id]["client"]
-    
+    is_multi_inverter = hass.data[DOMAIN][entry.entry_id].get("is_multi_inverter", False)
+
+    # Get the client (master client in multi-inverter setups)
+    if is_multi_inverter:
+        client = hass.data[DOMAIN][entry.entry_id]["clients"][0]  # Master client
+    else:
+        client = hass.data[DOMAIN][entry.entry_id]["client"]
+
+    # Only create switches for master inverter (controls are master-only)
     switches = [
         NeovoltForceChargeSwitch(coordinator, device_info, client, hass),
         NeovoltForceDischargeSwitch(coordinator, device_info, client, hass),
         NeovoltPreventSolarChargingSwitch(coordinator, device_info, client, hass),
     ]
-    
+
     async_add_entities(switches)
 
 
