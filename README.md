@@ -186,9 +186,7 @@ If you haven't connected your EW11A converter yet:
 - ⏰ **Time Period Control** - Enable time-based charging/discharging schedules
 
 **Quick Actions (Buttons)**
-- 🔄 **Dispatch Reset** - Stop all force charge/discharge
-- 🛑 **Stop Charging** - Quickly stop force charging
-- 🛑 **Stop Discharging** - Quickly stop force discharging
+- 🛑 **Stop Force Charge/Discharge** - Quickly stop all force charging / discharging commands
 
 ---
 
