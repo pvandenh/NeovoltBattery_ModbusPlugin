@@ -172,12 +172,12 @@ If you haven't connected your EW11A converter yet:
 
 **Power Settings (Sliders)**
 - ⚡ **Force Charging Power** - How fast to charge (0.5 - configured max kW)
-- ⏱️ **Force Charging Duration** - How long to charge (5-480 minutes)
+- ⏱️ **Force Charging Duration** - How long to charge (1-480 minutes)
 - 🎯 **Charging SOC Target** - Stop charging at this % (10-100%)
 - ⚡ **Force Discharging Power** - How fast to discharge (0.5 - configured max kW)
-- ⏱️ **Force Discharging Duration** - How long to discharge (5-480 minutes)
+- ⏱️ **Force Discharging Duration** - How long to discharge (1-480 minutes)
 - 🎯 **Discharging SOC Cutoff** - Stop discharging at this % (4-50%)
-- ⏱️ **Prevent Solar Charging Duration** - How long to block solar charging (15-1440 minutes)
+- ⏱️ **Prevent Solar Charging Duration** - How long to block solar charging (1-1440 minutes)
 
 **System Settings**
 - 🌐 **Max Feed to Grid** - Limit grid export (0-100%)
