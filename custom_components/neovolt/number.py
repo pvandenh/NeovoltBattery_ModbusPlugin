@@ -40,7 +40,7 @@ async def async_setup_entry(
         NeovoltNumber(
             coordinator, device_info, client, hass,
             "max_feed_to_grid", "Max Feed to Grid Power",
-            0, 100, 1, PERCENTAGE, 0x0800, True
+            0, 100, 1, PERCENTAGE, 0x0700, True
         ),
         NeovoltNumber(
             coordinator, device_info, client, hass,
