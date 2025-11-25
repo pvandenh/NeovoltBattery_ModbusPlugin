@@ -176,10 +176,14 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 # 0x08D0-0x08D1: PV Inverter Energy (scale 0.01)
                 data["pv_inverter_energy"] = self._to_unsigned_32(pv_inv_regs[0], pv_inv_regs[1]) * 0.01
 
+            # Feed to grid runtime setting (0x0700)
+            feed_to_grid_reg = self.client.read_holding_registers(0x0700, 1)
+            if feed_to_grid_reg:
+                data["max_feed_to_grid"] = feed_to_grid_reg[0]
+
             # Settings (0x0800-0x0855)
             settings_regs = self.client.read_holding_registers(0x0800, 86)
             if settings_regs:
-                data["max_feed_to_grid"] = settings_regs[0]
                 data["charging_cutoff_soc"] = settings_regs[85]
                 data["discharging_cutoff_soc"] = settings_regs[80]
                 data["time_period_control_flag"] = settings_regs[79]
