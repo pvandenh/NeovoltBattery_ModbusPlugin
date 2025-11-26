@@ -189,6 +189,8 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             settings_regs = self.client.read_holding_registers(0x0800, 86)
             if settings_regs:
                 data["max_feed_to_grid"] = settings_regs[0]
+                # PV Capacity (0x0801-0x0802, 32-bit in Watts)
+                data["pv_capacity"] = (settings_regs[1] << 16) | settings_regs[2]
                 data["charging_cutoff_soc"] = settings_regs[85]
                 data["discharging_cutoff_soc"] = settings_regs[80]
                 data["time_period_control_flag"] = settings_regs[79]

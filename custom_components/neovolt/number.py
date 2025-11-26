@@ -102,6 +102,14 @@ async def async_setup_entry(
             1, 1440, 1, UnitOfTime.MINUTES, None, False,
             default_value=480, icon="mdi:timer-lock"
         ),
+
+        # PV Capacity (32-bit register, in Watts)
+        NeovoltNumber(
+            coordinator, device_info, client, hass,
+            "pv_capacity", "PV Capacity",
+            0, max_charge_power * 1000, 100, UnitOfPower.WATT, 0x0801, True,
+            icon="mdi:solar-power", config_entry=entry, is_32bit=True
+        ),
     ]
     
     async_add_entities(numbers)
@@ -111,22 +119,24 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     """Representation of a Neovolt number entity."""
 
     def __init__(
-        self, 
-        coordinator, 
-        device_info, 
-        client, 
-        hass, 
-        key, 
-        name, 
-        min_val, 
-        max_val, 
-        step, 
-        unit, 
-        address=None, 
+        self,
+        coordinator,
+        device_info,
+        client,
+        hass,
+        key,
+        name,
+        min_val,
+        max_val,
+        step,
+        unit,
+        address=None,
         write_to_modbus=True,
         default_value=None,
         icon=None,
-        config_entry=None
+        config_entry=None,
+        is_32bit=False,
+        scale=1
     ):
         """Initialize the number entity."""
         super().__init__(coordinator)
@@ -136,6 +146,8 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         self._address = address
         self._write_to_modbus = write_to_modbus
         self._config_entry = config_entry
+        self._is_32bit = is_32bit
+        self._scale = scale
         self._attr_name = f"Neovolt Inverter {name}"
         self._attr_unique_id = f"neovolt_inverter_{key}"
         self._attr_native_min_value = min_val
@@ -144,10 +156,10 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_unit_of_measurement = unit
         self._attr_mode = NumberMode.SLIDER
         self._attr_device_info = device_info
-        
+
         if icon:
             self._attr_icon = icon
-        
+
         # Set default values for local settings
         if not write_to_modbus:
             self._local_value = default_value if default_value is not None else min_val
@@ -156,11 +168,13 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     def native_max_value(self) -> float:
         """Return the maximum value (dynamically from config if applicable)."""
         # Update max value from config entry for power settings
-        if self._config_entry and self._key in ["force_charging_power", "force_discharging_power"]:
-            config_key = CONF_MAX_CHARGE_POWER if "charging" in self._key else CONF_MAX_DISCHARGE_POWER
-            new_max = self._config_entry.data.get(config_key, self._attr_native_max_value)
+        if self._config_entry and self._key in ["force_charging_power", "force_discharging_power", "pv_capacity"]:
+            config_key = CONF_MAX_CHARGE_POWER if "charging" in self._key or self._key == "pv_capacity" else CONF_MAX_DISCHARGE_POWER
+            config_max = self._config_entry.data.get(config_key, self._attr_native_max_value)
+            # pv_capacity is in Watts, config is in kW
+            new_max = config_max * 1000 if self._key == "pv_capacity" else config_max
             if new_max != self._attr_native_max_value:
-                _LOGGER.info(f"Updated max value for {self._key} to {new_max} kW")
+                _LOGGER.info(f"Updated max value for {self._key} to {new_max}")
                 self._attr_native_max_value = new_max
         return self._attr_native_max_value
 
@@ -178,11 +192,24 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         """Set new value."""
         try:
             if self._write_to_modbus and self._address:
-                # Write directly to Modbus
-                _LOGGER.info(f"Writing {value} to Modbus register {hex(self._address)} for {self._key}")
-                await self._hass.async_add_executor_job(
-                    self._client.write_register, self._address, int(value)
-                )
+                if self._is_32bit:
+                    # 32-bit write: convert to scaled value and split into high/low words
+                    scaled_value = int(value * self._scale)
+                    high_word = (scaled_value >> 16) & 0xFFFF
+                    low_word = scaled_value & 0xFFFF
+                    _LOGGER.info(
+                        f"Writing {value} (scaled: {scaled_value}) to Modbus registers "
+                        f"{hex(self._address)}/{hex(self._address + 1)} for {self._key}"
+                    )
+                    await self._hass.async_add_executor_job(
+                        self._client.write_registers, self._address, [high_word, low_word]
+                    )
+                else:
+                    # Single register write
+                    _LOGGER.info(f"Writing {value} to Modbus register {hex(self._address)} for {self._key}")
+                    await self._hass.async_add_executor_job(
+                        self._client.write_register, self._address, int(value)
+                    )
                 await self.coordinator.async_request_refresh()
             else:
                 # Store locally for force charge/discharge settings
