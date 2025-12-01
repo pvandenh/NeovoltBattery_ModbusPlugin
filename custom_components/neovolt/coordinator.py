@@ -35,9 +35,11 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             slave_id=self.slave_id,
         )
 
-        # Daily reset tracking
+        # Daily reset tracking - IMPROVED
         self._last_reset_date = None
         self._pv_inverter_energy_at_midnight = None
+        self._last_known_total_energy = None  # Track last valid reading
+        self._daily_energy_before_unavailable = None  # Preserve daily value during outages
 
         super().__init__(
             hass,
@@ -175,15 +177,28 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 # 0x055B-0x055C: Backup Power (int32, no scaling)
                 data["backup_power"] = self._to_signed_32(inv_regs[91], inv_regs[92])
 
-            # AC-coupled PV (0x08D0)
+            # AC-coupled PV (0x08D0) - IMPROVED HANDLING
             pv_inv_regs = self.client.read_holding_registers(0x08D0, 2)
             if pv_inv_regs:
                 # 0x08D0-0x08D1: PV Inverter Energy (scale 0.01)
                 pv_inverter_total = self._to_unsigned_32(pv_inv_regs[0], pv_inv_regs[1]) * 0.01
                 data["pv_inverter_energy"] = pv_inverter_total
                 
-                # Calculate daily reset value
+                # Calculate daily reset value with improved unavailability handling
                 data["pv_inverter_energy_today"] = self._calculate_daily_pv_energy(pv_inverter_total)
+            else:
+                # CRITICAL FIX: When register read fails, preserve last known values
+                _LOGGER.warning("Failed to read PV inverter energy register - using last known values")
+                
+                # Keep the lifetime value if we have it
+                if self._last_known_total_energy is not None:
+                    data["pv_inverter_energy"] = self._last_known_total_energy
+                    _LOGGER.debug(f"Using last known PV inverter energy: {self._last_known_total_energy} kWh")
+                
+                # Keep the daily value preserved from before unavailability
+                if self._daily_energy_before_unavailable is not None:
+                    data["pv_inverter_energy_today"] = self._daily_energy_before_unavailable
+                    _LOGGER.debug(f"Preserving daily PV energy during unavailability: {self._daily_energy_before_unavailable} kWh")
 
             # Settings (0x0800-0x0855)
             settings_regs = self.client.read_holding_registers(0x0800, 86)
@@ -242,6 +257,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
     def _calculate_daily_pv_energy(self, total_energy: float) -> float:
         """
         Calculate daily PV inverter energy by resetting at midnight.
+        IMPROVED: Handles source sensor unavailability without resetting.
         
         Args:
             total_energy: The lifetime total PV inverter energy in kWh
@@ -251,6 +267,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         """
         now = dt_util.now()
         current_date = now.date()
+        
+        # Update last known total energy (for when source goes unavailable)
+        if total_energy is not None:
+            self._last_known_total_energy = total_energy
         
         # Check if we need to reset (new day)
         if self._last_reset_date != current_date:
@@ -262,6 +282,9 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             self._pv_inverter_energy_at_midnight = total_energy
             self._last_reset_date = current_date
             
+            # Clear preserved value from yesterday
+            self._daily_energy_before_unavailable = None
+            
             # First reading of the day = 0
             return 0.0
         
@@ -269,15 +292,25 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         if self._pv_inverter_energy_at_midnight is not None:
             daily_energy = total_energy - self._pv_inverter_energy_at_midnight
             
-            # Handle counter rollover (unlikely but possible)
+            # Handle counter rollover or decrease (shouldn't happen but be defensive)
             if daily_energy < 0:
                 _LOGGER.warning(
-                    f"PV inverter energy counter appears to have rolled over. "
-                    f"Total: {total_energy}, Midnight: {self._pv_inverter_energy_at_midnight}"
+                    f"PV inverter energy counter appears to have rolled over or decreased. "
+                    f"Total: {total_energy}, Midnight: {self._pv_inverter_energy_at_midnight}. "
+                    f"Resetting midnight baseline."
                 )
-                # Reset midnight baseline
+                # Reset midnight baseline to current value
                 self._pv_inverter_energy_at_midnight = total_energy
+                # Preserve the daily value we had before this anomaly
+                if self._daily_energy_before_unavailable is not None:
+                    _LOGGER.info(f"Preserving daily value of {self._daily_energy_before_unavailable} kWh during counter anomaly")
+                    return self._daily_energy_before_unavailable
                 return 0.0
+            
+            # CRITICAL FIX: Preserve daily value when source is about to go unavailable
+            # This prevents reset when Modbus connection drops briefly
+            if daily_energy > 0:
+                self._daily_energy_before_unavailable = round(daily_energy, 2)
                 
             return round(daily_energy, 2)
         else:
@@ -285,6 +318,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.info(f"Establishing PV inverter energy baseline: {total_energy} kWh")
             self._pv_inverter_energy_at_midnight = total_energy
             self._last_reset_date = current_date
+            self._daily_energy_before_unavailable = 0.0
             return 0.0
 
     @staticmethod
