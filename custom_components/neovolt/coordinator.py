@@ -125,10 +125,12 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 data["battery_min_cell_voltage"] = battery_regs[7] * 0.001
                 # 0x010A: Battery Max Cell Voltage (scale 0.001)
                 data["battery_max_cell_voltage"] = battery_regs[10] * 0.001
-                # 0x010D: Battery Min Cell Temperature (signed, scale 0.01)
-                data["battery_min_cell_temp"] = self._to_signed(battery_regs[13]) * 0.01
-                # 0x0110: Battery Max Cell Temperature (signed, scale 0.01)
-                data["battery_max_cell_temp"] = self._to_signed(battery_regs[16]) * 0.01
+                # NOTE: The Modbus reference documentation incorrectly states temperature
+                # scale as 0.01°C, but testing confirms the actual scale is 0.1°C.
+                # 0x010D: Battery Min Cell Temperature (signed, scale 0.1)
+                data["battery_min_cell_temp"] = self._to_signed(battery_regs[13]) * 0.1
+                # 0x0110: Battery Max Cell Temperature (signed, scale 0.1)
+                data["battery_max_cell_temp"] = self._to_signed(battery_regs[16]) * 0.1
                 # 0x0119: Battery Capacity (scale 0.1)
                 data["battery_capacity"] = battery_regs[25] * 0.1
                 # 0x011B: Battery SOH (scale 0.1)
