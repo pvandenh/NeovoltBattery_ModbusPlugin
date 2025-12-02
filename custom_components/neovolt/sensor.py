@@ -87,7 +87,13 @@ async def async_setup_entry(
         NeovoltSensor(coordinator, device_info, "pv_power_total", "PV Total Active Power",
                      UnitOfPower.WATT, SensorDeviceClass.POWER,
                      SensorStateClass.MEASUREMENT, "mdi:solar-power"),
-        
+        NeovoltSensor(coordinator, device_info, "pv_dc_power_total", "PV DC Power",
+                     UnitOfPower.WATT, SensorDeviceClass.POWER,
+                     SensorStateClass.MEASUREMENT, "mdi:solar-power"),
+        NeovoltSensor(coordinator, device_info, "pv_ac_power_total", "PV AC Power",
+                     UnitOfPower.WATT, SensorDeviceClass.POWER,
+                     SensorStateClass.MEASUREMENT, "mdi:solar-power-variant"),
+
         # Battery Sensors
         NeovoltSensor(coordinator, device_info, "battery_voltage", "Battery Voltage",
                      UnitOfElectricPotential.VOLT, SensorDeviceClass.VOLTAGE,

@@ -99,18 +99,19 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             else:
                 _LOGGER.warning("Failed to read grid registers - grid data unavailable")
 
-            # PV data (0x0090-0x00A3)
+            # PV data (0x0090-0x00A3) - AC-coupled PV meter
             pv_regs = self.client.read_holding_registers(0x0090, 20)
             if pv_regs:
                 # 0x0090-0x0091: PV Total Energy Feed to Grid (scale 0.01)
                 data["pv_energy_feed"] = self._to_unsigned_32(pv_regs[0], pv_regs[1]) * 0.01
                 # 0x0094: PV Voltage Phase A (no scaling)
                 data["pv_voltage_a"] = pv_regs[4]
-                # 0x00A1-0x00A2: PV Total Active Power (int32, no scaling)
-                data["pv_power_total"] = self._to_signed_32(pv_regs[17], pv_regs[18])
+                # 0x00A1-0x00A2: PV Total Active Power (int32, no scaling) - AC-coupled only
+                data["pv_ac_power_total"] = self._to_signed_32(pv_regs[17], pv_regs[18])
                 successful_reads["pv"] = True
             else:
                 _LOGGER.warning("Failed to read PV registers - PV data unavailable")
+                data["pv_ac_power_total"] = 0
 
             # Battery data (0x0100-0x0127)
             battery_regs = self.client.read_holding_registers(0x0100, 40)
@@ -174,33 +175,50 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 data["pv1_power"] = inv_regs[42]
                 data["pv2_power"] = inv_regs[43]
                 data["pv3_power"] = inv_regs[44]
+                # 0x052D: Total DC PV Power (no scaling) - DC-coupled PV total
+                data["pv_dc_power_total"] = inv_regs[45]
+
+                # Combine DC + AC PV power for true total
+                # DC from 0x052D, AC from 0x00A1-0x00A2
+                data["pv_power_total"] = data.get("pv_dc_power_total", 0) + data.get("pv_ac_power_total", 0)
+
                 # 0x0545-0x0546: INV Active Power (int32, no scaling)
                 data["inv_power_active"] = self._to_signed_32(inv_regs[69], inv_regs[70])
                 # 0x055B-0x055C: Backup Power (int32, no scaling)
                 data["backup_power"] = self._to_signed_32(inv_regs[91], inv_regs[92])
+            else:
+                # Fallback: if inverter registers fail, use AC-only for pv_power_total
+                data["pv_dc_power_total"] = 0
+                data["pv_power_total"] = data.get("pv_ac_power_total", 0)
 
             # AC-coupled PV (0x08D0) - IMPROVED HANDLING
             pv_inv_regs = self.client.read_holding_registers(0x08D0, 2)
             if pv_inv_regs:
-                # 0x08D0-0x08D1: PV Inverter Energy (scale 0.01)
+                # 0x08D0-0x08D1: PV Inverter Energy (scale 0.01) - AC-coupled only
                 pv_inverter_total = self._to_unsigned_32(pv_inv_regs[0], pv_inv_regs[1]) * 0.01
                 data["pv_inverter_energy"] = pv_inverter_total
-                
-                # Calculate daily reset value with improved unavailability handling
-                data["pv_inverter_energy_today"] = self._calculate_daily_pv_energy(pv_inverter_total)
             else:
                 # CRITICAL FIX: When register read fails, preserve last known values
                 _LOGGER.warning("Failed to read PV inverter energy register - using last known values")
-                
+                pv_inverter_total = 0
+
                 # Keep the lifetime value if we have it
                 if self._last_known_total_energy is not None:
                     data["pv_inverter_energy"] = self._last_known_total_energy
                     _LOGGER.debug(f"Using last known PV inverter energy: {self._last_known_total_energy} kWh")
-                
+
+            # Calculate combined daily PV energy (DC + AC)
+            # DC from total_pv_energy (0x050A), AC from pv_inverter_energy (0x08D0)
+            dc_pv_energy = data.get("total_pv_energy", 0)
+            ac_pv_energy = data.get("pv_inverter_energy", pv_inverter_total)
+            combined_pv_energy = dc_pv_energy + ac_pv_energy
+
+            if combined_pv_energy > 0:
+                data["pv_inverter_energy_today"] = self._calculate_daily_pv_energy(combined_pv_energy)
+            elif self._daily_energy_before_unavailable is not None:
                 # Keep the daily value preserved from before unavailability
-                if self._daily_energy_before_unavailable is not None:
-                    data["pv_inverter_energy_today"] = self._daily_energy_before_unavailable
-                    _LOGGER.debug(f"Preserving daily PV energy during unavailability: {self._daily_energy_before_unavailable} kWh")
+                data["pv_inverter_energy_today"] = self._daily_energy_before_unavailable
+                _LOGGER.debug(f"Preserving daily PV energy during unavailability: {self._daily_energy_before_unavailable} kWh")
 
             # Settings (0x0800-0x0855)
             settings_regs = self.client.read_holding_registers(0x0800, 86)
