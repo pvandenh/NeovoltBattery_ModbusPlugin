@@ -1,4 +1,4 @@
-"""Modbus client for Neovolt/Bytewatt inverter - FIXED FOR PYMODBUS 3.11.2"""
+"""Modbus client for Neovolt/Bytewatt inverter - FIXED FOR PROTOCOL COMPLIANCE"""
 import logging
 import threading
 import time
@@ -11,6 +11,10 @@ _LOGGER = logging.getLogger(__name__)
 MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 0.5  # seconds
 MAX_RETRY_DELAY = 5.0  # seconds
+
+# Protocol requirements from BYTEWATT Modbus_RTU Protocol (V1.12)
+PROTOCOL_COMMAND_INTERVAL = 0.3  # 300ms minimum between commands (>300ms required)
+PROTOCOL_RESPONSE_TIMEOUT = 10.0  # 10 second timeout (>10S required)
 
 
 class NeovoltModbusClient:
@@ -26,7 +30,25 @@ class NeovoltModbusClient:
         self._last_error = None  # Track last error to avoid log spam
         self._consecutive_errors = 0  # Track error count
         self._is_closing = False  # Track if we're deliberately closing
+        self._last_command_time = 0  # Track time of last command for protocol compliance
         _LOGGER.info(f"Initialized Modbus client for {host}:{port} (slave: {slave_id})")
+
+    def _enforce_command_interval(self):
+        """
+        Enforce minimum command interval required by protocol.
+        
+        BYTEWATT protocol requires >300ms between commands.
+        This prevents overwhelming the device and ensures reliable communication.
+        """
+        current_time = time.time()
+        time_since_last = current_time - self._last_command_time
+        
+        if time_since_last < PROTOCOL_COMMAND_INTERVAL:
+            sleep_time = PROTOCOL_COMMAND_INTERVAL - time_since_last
+            _LOGGER.debug(f"Enforcing protocol delay: {sleep_time:.3f}s")
+            time.sleep(sleep_time)
+        
+        self._last_command_time = time.time()
 
     @staticmethod
     def _is_transient_error(exception):
@@ -136,17 +158,24 @@ class NeovoltModbusClient:
                 except Exception:
                     pass  # Ignore errors during cleanup
             
+            # Create new client with protocol-compliant timeout
             self.client = ModbusTcpClient(
                 host=self.host,
                 port=self.port,
-                timeout=10
+                timeout=PROTOCOL_RESPONSE_TIMEOUT
             )
+            
             connected = self.client.connect()
+            
             if connected:
                 _LOGGER.info(f"Connected to Modbus device at {self.host}:{self.port}")
+                # Small delay after connection to let device stabilize
+                time.sleep(0.1)
             else:
                 _LOGGER.error(f"Failed to connect to Modbus device at {self.host}:{self.port}")
+            
             return connected
+            
         except Exception as e:
             _LOGGER.error(f"Connection error for {self.host}:{self.port}: {e}")
             return False
@@ -168,6 +197,9 @@ class NeovoltModbusClient:
                         return False
 
             _LOGGER.info("TCP connected! Reading SOC register...")
+
+            # Enforce protocol delay before reading
+            self._enforce_command_interval()
 
             # CORRECT pymodbus 3.x API - uses device_id parameter (not slave/unit)
             result = self.client.read_holding_registers(
@@ -232,6 +264,9 @@ class NeovoltModbusClient:
             if not isinstance(self.slave_id, int):
                 raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
 
+            # CRITICAL: Enforce protocol command interval (>300ms between commands)
+            self._enforce_command_interval()
+
             # I/O operation performed outside lock to allow concurrent operations
             result = self.client.read_holding_registers(
                 address=address,
@@ -281,6 +316,9 @@ class NeovoltModbusClient:
             
             if not isinstance(self.slave_id, int):
                 raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
+
+            # CRITICAL: Enforce protocol command interval (>300ms between commands)
+            self._enforce_command_interval()
 
             # I/O operation performed outside lock to allow concurrent operations
             result = self.client.write_register(
@@ -333,6 +371,9 @@ class NeovoltModbusClient:
             
             if not isinstance(self.slave_id, int):
                 raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
+
+            # CRITICAL: Enforce protocol command interval (>300ms between commands)
+            self._enforce_command_interval()
 
             # I/O operation performed outside lock to allow concurrent operations
             result = self.client.write_registers(
