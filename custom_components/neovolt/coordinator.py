@@ -18,6 +18,9 @@ _LOGGER = logging.getLogger(__name__)
 # Update interval - how often to poll the inverter
 UPDATE_INTERVAL = timedelta(seconds=10)
 
+# Minimum time between persistent data saves (prevents excessive writes)
+SAVE_DEBOUNCE_INTERVAL = timedelta(minutes=5)
+
 # Keys for storing persistent data in config entry
 STORAGE_LAST_RESET_DATE = "last_reset_date"
 STORAGE_MIDNIGHT_BASELINE = "pv_inverter_energy_at_midnight"
@@ -40,6 +43,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             port=self.port,
             slave_id=self.slave_id,
         )
+
+        # Debouncing for persistent data saves
+        self._last_save_time = None
+        self._pending_save = False
 
         # Load persistent values from config entry options
         # This ensures they survive Home Assistant restarts
@@ -80,7 +87,20 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         )
 
     def _save_persistent_data(self) -> None:
-        """Save daily tracking data to config entry options."""
+        """Save daily tracking data to config entry options with debouncing."""
+        now = datetime.now()
+        
+        # Debounce: only save if enough time has passed since last save
+        if self._last_save_time and (now - self._last_save_time) < SAVE_DEBOUNCE_INTERVAL:
+            # Mark that a save is pending but don't execute yet
+            self._pending_save = True
+            _LOGGER.debug(f"Debouncing save - {(now - self._last_save_time).seconds}s since last save")
+            return
+        
+        # Reset pending flag and update last save time
+        self._pending_save = False
+        self._last_save_time = now
+        
         # Prepare data to save
         new_options = dict(self.entry.options or {})
         
@@ -296,7 +316,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 data["pv_inverter_energy_today"] = 0
                 _LOGGER.warning("No PV energy data available - setting daily to 0")
 
-            # Save persistent data if anything changed
+            # Save persistent data if anything changed (with debouncing)
             if save_needed:
                 # Schedule save on the event loop (we're in executor thread)
                 self.hass.loop.call_soon_threadsafe(self._save_persistent_data)

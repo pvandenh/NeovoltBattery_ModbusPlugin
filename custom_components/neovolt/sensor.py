@@ -116,9 +116,10 @@ async def async_setup_entry(
         NeovoltSensor(coordinator, device_info, "battery_max_cell_temp", "Battery Max Cell Temperature",
                      UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE,
                      SensorStateClass.MEASUREMENT, "mdi:thermometer-high"),
+        # FIXED: Changed state_class from MEASUREMENT to TOTAL for battery capacity
         NeovoltSensor(coordinator, device_info, "battery_capacity", "Battery Capacity",
                      UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
-                     SensorStateClass.MEASUREMENT, "mdi:battery-charging-100"),
+                     SensorStateClass.TOTAL, "mdi:battery-charging-100"),
         NeovoltSensor(coordinator, device_info, "battery_soh", "Battery SOH",
                      PERCENTAGE, None, SensorStateClass.MEASUREMENT, "mdi:battery-heart-variant"),
         NeovoltSensor(coordinator, device_info, "battery_charge_energy", "Battery Charge Energy",
