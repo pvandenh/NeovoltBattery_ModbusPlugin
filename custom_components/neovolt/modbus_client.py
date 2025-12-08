@@ -25,6 +25,7 @@ class NeovoltModbusClient:
         self._lock = threading.Lock()  # Protect connection state
         self._last_error = None  # Track last error to avoid log spam
         self._consecutive_errors = 0  # Track error count
+        self._is_closing = False  # Track if we're deliberately closing
         _LOGGER.info(f"Initialized Modbus client for {host}:{port} (slave: {slave_id})")
 
     @staticmethod
@@ -72,6 +73,11 @@ class NeovoltModbusClient:
         last_exception = None
 
         for attempt in range(1, MAX_RETRIES + 1):
+            # Check if we're being closed
+            if self._is_closing:
+                _LOGGER.debug(f"{operation_name} cancelled - client is closing")
+                return None
+
             try:
                 result = operation(*args, **kwargs)
 
@@ -123,6 +129,13 @@ class NeovoltModbusClient:
     def connect(self):
         """Establish connection to the Modbus device."""
         try:
+            # Close existing connection if any
+            if self.client:
+                try:
+                    self.client.close()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+            
             self.client = ModbusTcpClient(
                 host=self.host,
                 port=self.port,
@@ -194,15 +207,30 @@ class NeovoltModbusClient:
             List of register values or None on error
         """
         def _read_operation():
+            # Check if we're being closed
+            if self._is_closing:
+                raise ConnectionException("Client is being closed")
+
             # Lock is held only during connection check to avoid blocking during I/O
             # pymodbus client itself is thread-safe for concurrent reads/writes
             # We only need to protect the connection state check/establishment
             with self._lock:
+                # Additional check after acquiring lock
+                if self._is_closing:
+                    raise ConnectionException("Client is being closed")
+                    
                 if not self.client or not self.client.connected:
                     if not self.connect():
                         raise ConnectionException(
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
+
+            # Validate client and slave_id before making the call
+            if not self.client:
+                raise ConnectionException("Client not initialized")
+            
+            if not isinstance(self.slave_id, int):
+                raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
 
             # I/O operation performed outside lock to allow concurrent operations
             result = self.client.read_holding_registers(
@@ -231,13 +259,28 @@ class NeovoltModbusClient:
             True if successful, False otherwise
         """
         def _write_operation():
+            # Check if we're being closed
+            if self._is_closing:
+                raise ConnectionException("Client is being closed")
+
             # Lock held only during connection check (see read_holding_registers for rationale)
             with self._lock:
+                # Additional check after acquiring lock
+                if self._is_closing:
+                    raise ConnectionException("Client is being closed")
+                    
                 if not self.client or not self.client.connected:
                     if not self.connect():
                         raise ConnectionException(
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
+
+            # Validate client and slave_id before making the call
+            if not self.client:
+                raise ConnectionException("Client not initialized")
+            
+            if not isinstance(self.slave_id, int):
+                raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
 
             # I/O operation performed outside lock to allow concurrent operations
             result = self.client.write_register(
@@ -268,13 +311,28 @@ class NeovoltModbusClient:
             True if successful, False otherwise
         """
         def _write_operation():
+            # Check if we're being closed
+            if self._is_closing:
+                raise ConnectionException("Client is being closed")
+
             # Lock held only during connection check (see read_holding_registers for rationale)
             with self._lock:
+                # Additional check after acquiring lock
+                if self._is_closing:
+                    raise ConnectionException("Client is being closed")
+                    
                 if not self.client or not self.client.connected:
                     if not self.connect():
                         raise ConnectionException(
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
+
+            # Validate client and slave_id before making the call
+            if not self.client:
+                raise ConnectionException("Client not initialized")
+            
+            if not isinstance(self.slave_id, int):
+                raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
 
             # I/O operation performed outside lock to allow concurrent operations
             result = self.client.write_registers(
@@ -295,6 +353,16 @@ class NeovoltModbusClient:
     
     def close(self):
         """Close the Modbus connection."""
-        if self.client:
-            self.client.close()
-            _LOGGER.info(f"Closed connection to {self.host}:{self.port}")
+        with self._lock:
+            self._is_closing = True  # Signal that we're closing
+            
+            if self.client:
+                try:
+                    self.client.close()
+                    _LOGGER.info(f"Closed connection to {self.host}:{self.port}")
+                except Exception as e:
+                    _LOGGER.debug(f"Error closing connection (ignored): {e}")
+                finally:
+                    self.client = None
+            
+            self._is_closing = False  # Reset flag after cleanup
