@@ -4,7 +4,6 @@ A Home Assistant custom integration for Neovolt/Bytewatt inverters and battery s
 
 <img width="225" height="80" alt="image" src="https://github.com/user-attachments/assets/fd21d47f-ff23-44cb-bd60-02c9f13d0f06" />
 
-
 ## 🎯 What Does This Do?
 
 This integration connects your Neovolt inverter to Home Assistant, giving you:
@@ -21,7 +20,9 @@ Perfect for monitoring your battery system and creating smart automations to sav
 
 ### Hardware
 - ✅ Neovolt/Bytewatt inverter (battery or hybrid inverter)
-- ✅ **EW11A Modbus converter** (or compatible) - this connects your inverter to your network
+- ✅ **One of these connection options**:
+  - **Option A**: Direct Ethernet cable (if your inverter has Ethernet/Modbus TCP port)
+  - **Option B**: EW11A WiFi RS485 adapter (converts RS485 to WiFi/Ethernet)
 - ✅ Home Assistant installed and running
 
 ### Software
@@ -35,9 +36,66 @@ Perfect for monitoring your battery system and creating smart automations to sav
 
 ## 📦 Installation
 
-### Prep : Initial modbus hardware setup
-Download and follow this setup guide for the physical connection of modbus : https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/custom_components/neovolt/Neovolt_Modbus%20initial%20hardware%20setup.docx
+### Prep: Choose Your Connection Method
 
+**Which connection method should I use?**
+
+| Connection Type | When to Use | Pros | Cons |
+|----------------|-------------|------|------|
+| **Direct Ethernet** | Your inverter has built-in Ethernet/Modbus TCP port | ✅ Simple wiring<br>✅ No extra hardware<br>✅ Most reliable | ❌ Requires network access near inverter |
+| **EW11A WiFi Adapter** | Your inverter only has RS485 port | ✅ Wireless connection<br>✅ Flexible placement | ❌ Extra hardware needed<br>❌ Requires configuration |
+
+### Hardware Setup - Option A: Direct Ethernet Connection
+
+If your Neovolt inverter has a built-in Ethernet port with Modbus TCP support:
+
+1. **Connect Ethernet Cable**
+   - Plug an Ethernet cable directly into your inverter's Modbus TCP port
+   - Connect the other end to your network (router/switch)
+
+2. **Find the Inverter's IP Address**
+   - Check your router's device list
+   - Look for a device named similar to "Neovolt" or "Bytewatt"
+   - Note down the IP address (e.g., `192.168.2.125`)
+
+3. **Assign Static IP (Recommended)**
+   - In your router's DHCP settings, reserve this IP address for the inverter
+   - This prevents the IP from changing
+
+4. **Verify Connection**
+   - The inverter should already be configured for:
+     - **Port**: 502 (Modbus TCP standard)
+     - **Slave ID**: 85 (Neovolt default)
+   - Test by pinging the IP from Home Assistant Terminal:
+     ```
+     ping 192.168.2.125
+     ```
+
+**You're ready to install the integration! Skip to "Step 1: Add Custom Repository to HACS" below.**
+
+---
+
+### Hardware Setup - Option B: EW11A WiFi Adapter
+
+If your inverter only has RS485 ports, follow this detailed guide:
+
+📥 **Download Full Setup Guide**: [Neovolt_Modbus initial hardware setup.docx](https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/custom_components/neovolt/Neovolt_Modbus%20initial%20hardware%20setup.docx)
+
+**Quick Overview:**
+
+1. **Wire the EW11A adapter** to your inverter's RS485 port using the supplied cables
+2. **Connect EW11A to WiFi** - Configure it to join your home network
+3. **Configure Serial Settings**:
+   - Baud rate: 9600
+   - Protocol: Modbus
+4. **Configure Network Settings**:
+   - Protocol: TCP Server
+   - Port: 502
+5. **Assign Static IP** to the EW11A in your router
+
+For detailed wiring diagrams and step-by-step instructions, download the complete setup guide linked above.
+
+---
 
 ### Step 1: Add Custom Repository to HACS
 
@@ -50,8 +108,7 @@ Download and follow this setup guide for the physical connection of modbus : htt
    - **Category**: Select **Integration**
 6. Click **ADD**
 
-### Step 2: Install the 
-Integration
+### Step 2: Install the Integration
 
 1. In HACS, click **Integrations**
 2. Click the **+ EXPLORE & DOWNLOAD REPOSITORIES** button
@@ -75,16 +132,17 @@ You'll need to enter these details:
 
 | Setting | What to Enter | Example |
 |---------|---------------|---------|
-| **Host (IP Address)** | IP address of your EW11A Modbus converter | `192.168.1.100` |
+| **Host (IP Address)** | IP address of your inverter or EW11A | **Direct**: `192.168.2.125`<br>**EW11A**: `192.168.1.100` |
 | **Port** | Leave as default | `502` |
 | **Slave ID** | Leave as default | `85` |
 | **Max Charge Power** | Maximum charging power in kW | `5.0` (single inverter)<br>`15.0` (three inverters) |
 | **Max Discharge Power** | Maximum discharging power in kW | `5.0` (single inverter)<br>`15.0` (three inverters) |
 
 **Finding Your IP Address:**
-- Check your router's device list for "EW11A" or similar
-- Check the EW11A display screen
-- Use a network scanner app
+
+- **Direct Ethernet**: Check your router's device list for "Neovolt" or "Bytewatt"
+- **EW11A**: Check router for "EW11A" or check the EW11A's display screen
+- **Alternative**: Use a network scanner app on your phone
 
 **Multiple Inverters?**
 If you have a parallel/master-slave setup, enter the **total combined capacity**. For example, three 5kW inverters = 15kW total.
@@ -95,30 +153,41 @@ Your integration is now set up! You'll see a new device called "Neovolt Inverter
 
 ---
 
-## 🔌 Hardware Setup (EW11A Modbus Converter)
-NOTE : For a more detailed guide to the EW11A installation and setup, download and follow this guide instead : https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/custom_components/neovolt/Neovolt_Modbus%20initial%20hardware%20setup.docx
+## 🔌 Connection Troubleshooting
 
-If you haven't connected your EW11A converter yet:
+### Direct Ethernet Connection Issues
 
-1. **Connect to Inverter**
-   - Plug the EW11A into the inverter's RS485 port
+**Can't find inverter IP address:**
+1. ✅ Check router's connected devices list
+2. ✅ Look for device with MAC address starting with common inverter prefixes
+3. ✅ Try scanning network with tools like "Fing" mobile app
+4. ✅ Check inverter's display screen (may show IP)
 
-2. **Connect to Network**
-   - Connect the EW11A to your router
+**Connection refused on port 502:**
+1. ✅ Verify Modbus TCP is enabled on inverter
+2. ✅ Check firewall settings on network
+3. ✅ Ensure port 502 isn't blocked by router
 
-3. **Configure EW11A**
-   - Connect to the EW11A via its IP address in a web browser
-   - Set it to **TCP Server** mode
-   - Set port to **502**
-   - Set baud rate to **9600** (or as per inverter manual)
-   - Save and reboot
+**Intermittent connection:**
+1. ✅ Assign static IP to inverter in router
+2. ✅ Check Ethernet cable quality
+3. ✅ Verify network switch/router is working properly
 
-4. **Test Connection**
-   - Make sure the EW11A has a fixed IP address (set in your router)
-   - Ping the IP address from Home Assistant Terminal:
-     ```
-     ping 192.168.1.100
-     ```
+### EW11A WiFi Adapter Issues
+
+**Can't connect to EW11A network:**
+1. ✅ Make sure EW11A is powered
+2. ✅ Wait 30 seconds after power-on for WiFi to activate
+3. ✅ Look for network name starting with "EW11"
+4. ✅ Try factory reset if needed
+
+**EW11A not appearing on home network:**
+1. ✅ Verify WiFi credentials were entered correctly
+2. ✅ Check WiFi mode is set to "STA" (Station mode)
+3. ✅ Restart EW11A by unplugging and replugging
+4. ✅ Check router's connected devices list
+
+**For detailed EW11A setup:** See the [complete hardware setup guide](https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/custom_components/neovolt/Neovolt_Modbus%20initial%20hardware%20setup.docx)
 
 ---
 
@@ -246,6 +315,16 @@ entities:
 **Problem**: Integration can't connect to inverter
 
 **Solutions**:
+
+**For Direct Ethernet Connection:**
+1. ✅ Verify inverter is powered on
+2. ✅ Check IP address is correct (look in router's device list)
+3. ✅ Ping the IP address from Home Assistant Terminal
+4. ✅ Check Ethernet cable is securely connected
+5. ✅ Verify Modbus TCP is enabled on inverter (should be by default)
+6. ✅ Try rebooting the inverter
+
+**For EW11A Connection:**
 1. ✅ Check EW11A is powered on and connected to network
 2. ✅ Verify IP address is correct
 3. ✅ Ping the IP address from Home Assistant Terminal
@@ -259,8 +338,8 @@ entities:
 
 **Solutions**:
 1. ✅ Check Slave ID is correct (default: 85)
-2. ✅ Verify RS485 connection to inverter
-3. ✅ Check inverter is powered on
+2. ✅ Verify physical connection to inverter (Ethernet or RS485)
+3. ✅ Check inverter is powered on and operational
 4. ✅ Reload integration: Settings → Devices & Services → Neovolt → ⋮ → Reload
 5. ✅ Check logs: Settings → System → Logs (search for "neovolt")
 
@@ -288,7 +367,7 @@ entities:
 
 ---
 
-## 🔍 Enable Debug Logging
+## 📝 Enable Debug Logging
 
 If you need to troubleshoot, enable detailed logging:
 
@@ -318,6 +397,7 @@ If you're stuck:
 3. **Create a new issue** with:
    - Home Assistant version
    - Integration version
+   - Connection type (Direct Ethernet or EW11A)
    - Error messages from logs
    - What you've tried
    - Screenshots (if helpful)
@@ -327,7 +407,6 @@ If you're stuck:
 ---
 
 ## 🌟 Features Roadmap
-
 
 Want to contribute? Pull requests welcome!
 
@@ -339,7 +418,7 @@ MIT License - Feel free to use, modify, and share!
 
 ---
 
-## 👏 Credits
+## 👍 Credits
 
 - Based on Bytewatt Modbus RTU Protocol V1.12
 - Integration developed for the Home Assistant community, assisted by Claude.ai
@@ -353,8 +432,8 @@ MIT License - Feel free to use, modify, and share!
 - [ ] Custom repository added to HACS
 - [ ] Integration installed via HACS
 - [ ] Home Assistant restarted
-- [ ] EW11A converter connected and configured
-- [ ] IP address of EW11A noted
+- [ ] **Connection hardware setup** (Direct Ethernet OR EW11A)
+- [ ] IP address of inverter/EW11A noted
 - [ ] Integration added via Settings → Devices & Services
 - [ ] Connection details entered correctly
 - [ ] Max power configured (if multiple inverters)
