@@ -119,7 +119,9 @@ class NeovoltModbusClient:
 
                 # Log appropriately based on error type and attempt
                 if attempt < MAX_RETRIES and is_transient:
-                    _LOGGER.warning(
+                    # Use debug level for first retry during restarts to reduce log noise
+                    log_level = _LOGGER.debug if attempt == 1 else _LOGGER.warning
+                    log_level(
                         f"{operation_name} failed (attempt {attempt}/{MAX_RETRIES}): {e}. "
                         f"Retrying in {retry_delay:.1f}s..."
                     )
@@ -132,9 +134,15 @@ class NeovoltModbusClient:
                     # Only log if this is a new error or significant change
                     error_signature = f"{type(e).__name__}:{str(e)}"
                     if error_signature != self._last_error:
-                        _LOGGER.error(
-                            f"{operation_name} failed ({error_type} error): {e}"
-                        )
+                        # Use warning instead of error for transient failures during restarts
+                        if is_transient and self._consecutive_errors == 0:
+                            _LOGGER.warning(
+                                f"{operation_name} temporarily unavailable ({error_type} error): {e}"
+                            )
+                        else:
+                            _LOGGER.error(
+                                f"{operation_name} failed ({error_type} error): {e}"
+                            )
                         self._last_error = error_signature
                         self._consecutive_errors = 1
                     else:
@@ -149,12 +157,14 @@ class NeovoltModbusClient:
         return None
 
     def connect(self):
-        """Establish connection to the Modbus device."""
+        """Establish connection to the Modbus device with improved restart handling."""
         try:
             # Close existing connection if any
             if self.client:
                 try:
                     self.client.close()
+                    # Give device time to release the connection (critical for EW11A gateways)
+                    time.sleep(0.2)
                 except Exception:
                     pass  # Ignore errors during cleanup
             
@@ -165,7 +175,19 @@ class NeovoltModbusClient:
                 timeout=PROTOCOL_RESPONSE_TIMEOUT
             )
             
-            connected = self.client.connect()
+            # Try connection with brief retry for gateway connection limits
+            connected = False
+            for attempt in range(2):
+                try:
+                    connected = self.client.connect()
+                    if connected:
+                        break
+                except (ConnectionError, OSError) as e:
+                    if attempt == 0:
+                        _LOGGER.debug(f"Connection attempt {attempt + 1} failed, retrying: {e}")
+                        time.sleep(0.3)  # Brief wait for gateway to be ready
+                    else:
+                        raise
             
             if connected:
                 _LOGGER.info(f"Connected to Modbus device at {self.host}:{self.port}")
