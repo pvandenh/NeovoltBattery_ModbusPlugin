@@ -278,10 +278,14 @@ class NeovoltModbusClient:
                         raise ConnectionException(
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
+                
+                # CRITICAL: Create local reference to client while holding lock
+                # This prevents the client from becoming None during the operation
+                client_ref = self.client
 
-            # Validate client and slave_id before making the call
-            if not self.client:
-                raise ConnectionException("Client not initialized")
+            # Validate client reference and slave_id before making the call
+            if not client_ref:
+                raise ConnectionException("Client not initialized after connection attempt")
             
             if not isinstance(self.slave_id, int):
                 raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
@@ -289,8 +293,9 @@ class NeovoltModbusClient:
             # CRITICAL: Enforce protocol command interval (>300ms between commands)
             self._enforce_command_interval()
 
-            # I/O operation performed outside lock to allow concurrent operations
-            result = self.client.read_holding_registers(
+            # I/O operation performed outside lock using local reference
+            # This prevents NoneType errors if client is closed during operation
+            result = client_ref.read_holding_registers(
                 address=address,
                 count=count,
                 device_id=self.slave_id
@@ -331,10 +336,13 @@ class NeovoltModbusClient:
                         raise ConnectionException(
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
+                
+                # CRITICAL: Create local reference to client while holding lock
+                client_ref = self.client
 
-            # Validate client and slave_id before making the call
-            if not self.client:
-                raise ConnectionException("Client not initialized")
+            # Validate client reference and slave_id before making the call
+            if not client_ref:
+                raise ConnectionException("Client not initialized after connection attempt")
             
             if not isinstance(self.slave_id, int):
                 raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
@@ -342,8 +350,8 @@ class NeovoltModbusClient:
             # CRITICAL: Enforce protocol command interval (>300ms between commands)
             self._enforce_command_interval()
 
-            # I/O operation performed outside lock to allow concurrent operations
-            result = self.client.write_register(
+            # I/O operation performed outside lock using local reference
+            result = client_ref.write_register(
                 address=address,
                 value=value,
                 device_id=self.slave_id
@@ -386,10 +394,13 @@ class NeovoltModbusClient:
                         raise ConnectionException(
                             f"Failed to establish connection to {self.host}:{self.port}"
                         )
+                
+                # CRITICAL: Create local reference to client while holding lock
+                client_ref = self.client
 
-            # Validate client and slave_id before making the call
-            if not self.client:
-                raise ConnectionException("Client not initialized")
+            # Validate client reference and slave_id before making the call
+            if not client_ref:
+                raise ConnectionException("Client not initialized after connection attempt")
             
             if not isinstance(self.slave_id, int):
                 raise ValueError(f"Invalid slave_id type: {type(self.slave_id)}. Expected int.")
@@ -397,8 +408,8 @@ class NeovoltModbusClient:
             # CRITICAL: Enforce protocol command interval (>300ms between commands)
             self._enforce_command_interval()
 
-            # I/O operation performed outside lock to allow concurrent operations
-            result = self.client.write_registers(
+            # I/O operation performed outside lock using local reference
+            result = client_ref.write_registers(
                 address=address,
                 values=values,
                 device_id=self.slave_id
