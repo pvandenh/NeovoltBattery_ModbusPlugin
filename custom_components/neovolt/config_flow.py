@@ -14,10 +14,11 @@ from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
 from .const import (
-    DOMAIN, 
-    DEFAULT_PORT, 
-    DEFAULT_SLAVE_ID, 
+    DOMAIN,
+    DEFAULT_PORT,
+    DEFAULT_SLAVE_ID,
     CONF_SLAVE_ID,
+    CONF_DEVICE_NAME,
     CONF_MAX_CHARGE_POWER,
     CONF_MAX_DISCHARGE_POWER,
     DEFAULT_MAX_CHARGE_POWER,
@@ -34,6 +35,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_HOST): cv.string,
         vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
         vol.Required(CONF_SLAVE_ID, default=DEFAULT_SLAVE_ID): cv.positive_int,
+        vol.Optional(CONF_DEVICE_NAME, default=""): cv.string,
         vol.Required(CONF_MAX_CHARGE_POWER, default=DEFAULT_MAX_CHARGE_POWER): vol.All(
             vol.Coerce(float),
             vol.Range(min=MIN_POWER, max=MAX_POWER_LIMIT)
@@ -96,19 +98,34 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the initial step."""
         errors: dict[str, str] = {}
         description_placeholders: dict[str, str] = {}
-        
+
         if user_input is not None:
             try:
                 info = await validate_input(self.hass, user_input)
-                
+
                 # Set unique ID to prevent duplicate entries
                 # Include port to allow multiple Modbus gateways on same IP (different ports)
                 await self.async_set_unique_id(
                     f"{user_input[CONF_HOST]}_{user_input[CONF_PORT]}_{user_input[CONF_SLAVE_ID]}"
                 )
                 self._abort_if_unique_id_configured()
-                
-                return self.async_create_entry(title=info["title"], data=user_input)
+
+                # Generate device name if not provided
+                device_name = user_input.get(CONF_DEVICE_NAME, "").strip()
+                if not device_name:
+                    # Count existing neovolt entries to generate auto-increment number
+                    existing_entries = [
+                        entry for entry in self.hass.config_entries.async_entries(DOMAIN)
+                    ]
+                    device_name = str(len(existing_entries) + 1)
+
+                # Update user_input with the device name
+                user_input[CONF_DEVICE_NAME] = device_name
+
+                # Update title to include device name
+                title = f"Neovolt {device_name}"
+
+                return self.async_create_entry(title=title, data=user_input)
                 
             except CannotConnect as err:
                 _LOGGER.warning("Cannot connect to Neovolt inverter: %s", err)

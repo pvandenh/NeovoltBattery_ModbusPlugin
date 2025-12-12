@@ -7,7 +7,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
+from .const import CONF_DEVICE_NAME, DOMAIN
 from .coordinator import NeovoltDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,28 +24,37 @@ PLATFORMS: list[Platform] = [
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Neovolt from a config entry."""
     _LOGGER.debug(f"Setting up Neovolt integration with config: {entry.data}")
-    
+
+    # Migrate existing entries without device_name (keep "inverter" for backward compatibility)
+    if CONF_DEVICE_NAME not in entry.data:
+        new_data = {**entry.data, CONF_DEVICE_NAME: "inverter"}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        _LOGGER.info(f"Migrated existing entry to device_name='inverter'")
+
+    device_name = entry.data.get(CONF_DEVICE_NAME, "inverter")
+
     coordinator = NeovoltDataUpdateCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
-    # Create device info - removed specific model
+    # Create device info with device name
     device_info = DeviceInfo(
         identifiers={(DOMAIN, f"{entry.data['host']}_{entry.data['slave_id']}")},
-        name="Neovolt Inverter",
+        name=f"Neovolt {device_name}",
         manufacturer="Bytewatt Technology Co., Ltd",
-        model="Neovolt Hybrid Inverter",  # Generic model name
+        model="Neovolt Hybrid Inverter",
         sw_version=coordinator.data.get("ems_version"),
         configuration_url=f"http://{entry.data['host']}",
     )
 
     # Initialize domain data if not exists
     hass.data.setdefault(DOMAIN, {})
-    
-    # Store both coordinator and device info
+
+    # Store coordinator, device info, client, and device_name
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
         "device_info": device_info,
         "client": coordinator.client,
+        "device_name": device_name,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

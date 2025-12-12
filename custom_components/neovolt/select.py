@@ -23,11 +23,12 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     client = hass.data[DOMAIN][entry.entry_id]["client"]
-    
+    device_name = hass.data[DOMAIN][entry.entry_id]["device_name"]
+
     selects = [
-        NeovoltTimePeriodControlSelect(coordinator, device_info, client, hass),
+        NeovoltTimePeriodControlSelect(coordinator, device_info, device_name, client, hass),
     ]
-    
+
     async_add_entities(selects)
 
 
@@ -41,13 +42,13 @@ class NeovoltTimePeriodControlSelect(CoordinatorEntity, SelectEntity):
         "Enable Time Period Control",
     ]
 
-    def __init__(self, coordinator, device_info, client, hass):
+    def __init__(self, coordinator, device_info, device_name, client, hass):
         """Initialize the select entity."""
         super().__init__(coordinator)
         self._client = client
         self._hass = hass
-        self._attr_name = "Neovolt Inverter Time Period Control"
-        self._attr_unique_id = "neovolt_inverter_time_period_control"
+        self._attr_name = f"Neovolt {device_name} Time Period Control"
+        self._attr_unique_id = f"neovolt_{device_name}_time_period_control"
         self._attr_icon = "mdi:clock-time-four-outline"
         self._attr_device_info = device_info
 

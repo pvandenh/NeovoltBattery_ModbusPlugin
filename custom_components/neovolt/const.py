@@ -7,6 +7,7 @@ DEFAULT_PORT = 502
 DEFAULT_SLAVE_ID = 85
 
 CONF_SLAVE_ID = "slave_id"
+CONF_DEVICE_NAME = "device_name"
 
 # Max power configuration
 CONF_MAX_CHARGE_POWER = "max_charge_power"

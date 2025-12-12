@@ -99,26 +99,28 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     client = hass.data[DOMAIN][entry.entry_id]["client"]
-    
+    device_name = hass.data[DOMAIN][entry.entry_id]["device_name"]
+
     switches = [
-        NeovoltForceChargeSwitch(coordinator, device_info, client, hass),
-        NeovoltForceDischargeSwitch(coordinator, device_info, client, hass),
-        NeovoltPreventSolarChargingSwitch(coordinator, device_info, client, hass),
+        NeovoltForceChargeSwitch(coordinator, device_info, device_name, client, hass),
+        NeovoltForceDischargeSwitch(coordinator, device_info, device_name, client, hass),
+        NeovoltPreventSolarChargingSwitch(coordinator, device_info, device_name, client, hass),
     ]
-    
+
     async_add_entities(switches)
 
 
 class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
     """Force charge switch."""
 
-    def __init__(self, coordinator, device_info, client, hass):
+    def __init__(self, coordinator, device_info, device_name, client, hass):
         """Initialize the switch."""
         super().__init__(coordinator)
         self._client = client
         self._hass = hass
-        self._attr_name = "Neovolt Inverter Force Charging"
-        self._attr_unique_id = "neovolt_inverter_force_charging"
+        self._device_name = device_name
+        self._attr_name = f"Neovolt {device_name} Force Charging"
+        self._attr_unique_id = f"neovolt_{device_name}_force_charging"
         self._attr_icon = "mdi:battery-charging"
         self._attr_device_info = device_info
 
@@ -134,7 +136,7 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
             # Get charging power from number entity (default: 3.0 kW)
             power = safe_get_entity_float(
                 self._hass,
-                "number.neovolt_inverter_force_charging_power",
+                f"number.neovolt_{self._device_name}_force_charging_power",
                 3.0
             )
             power_watts = int(power * 1000)
@@ -142,7 +144,7 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
             # Get duration from number entity (default: 120 minutes)
             duration = int(safe_get_entity_float(
                 self._hass,
-                "number.neovolt_inverter_force_charging_duration",
+                f"number.neovolt_{self._device_name}_force_charging_duration",
                 120.0
             ))
             duration_seconds = duration * 60
@@ -150,7 +152,7 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
             # Get SOC target from number entity (default: 100%)
             soc_target = int(safe_get_entity_float(
                 self._hass,
-                "number.neovolt_inverter_charging_soc_target",
+                f"number.neovolt_{self._device_name}_charging_soc_target",
                 100.0
             ))
             soc_value = soc_percent_to_register(soc_target)
@@ -192,13 +194,14 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
 class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
     """Force discharge switch."""
 
-    def __init__(self, coordinator, device_info, client, hass):
+    def __init__(self, coordinator, device_info, device_name, client, hass):
         """Initialize the switch."""
         super().__init__(coordinator)
         self._client = client
         self._hass = hass
-        self._attr_name = "Neovolt Inverter Force Discharging"
-        self._attr_unique_id = "neovolt_inverter_force_discharging"
+        self._device_name = device_name
+        self._attr_name = f"Neovolt {device_name} Force Discharging"
+        self._attr_unique_id = f"neovolt_{device_name}_force_discharging"
         self._attr_icon = "mdi:battery-arrow-down"
         self._attr_device_info = device_info
 
@@ -214,7 +217,7 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
             # Get discharging power from number entity (default: 3.0 kW)
             power = safe_get_entity_float(
                 self._hass,
-                "number.neovolt_inverter_force_discharging_power",
+                f"number.neovolt_{self._device_name}_force_discharging_power",
                 3.0
             )
             power_watts = int(power * 1000)
@@ -222,7 +225,7 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
             # Get duration from number entity (default: 120 minutes)
             duration = int(safe_get_entity_float(
                 self._hass,
-                "number.neovolt_inverter_force_discharging_duration",
+                f"number.neovolt_{self._device_name}_force_discharging_duration",
                 120.0
             ))
             duration_seconds = duration * 60
@@ -230,7 +233,7 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
             # Get SOC cutoff from number entity (default: 20%)
             soc_cutoff = int(safe_get_entity_float(
                 self._hass,
-                "number.neovolt_inverter_discharging_soc_cutoff",
+                f"number.neovolt_{self._device_name}_discharging_soc_cutoff",
                 20.0
             ))
             soc_value = soc_percent_to_register(soc_cutoff)
@@ -271,13 +274,14 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
 class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
     """Prevent solar charging switch - stops battery from charging from solar."""
 
-    def __init__(self, coordinator, device_info, client, hass):
+    def __init__(self, coordinator, device_info, device_name, client, hass):
         """Initialize the switch."""
         super().__init__(coordinator)
         self._client = client
         self._hass = hass
-        self._attr_name = "Neovolt Inverter Prevent Solar Charging"
-        self._attr_unique_id = "neovolt_inverter_prevent_solar_charging"
+        self._device_name = device_name
+        self._attr_name = f"Neovolt {device_name} Prevent Solar Charging"
+        self._attr_unique_id = f"neovolt_{device_name}_prevent_solar_charging"
         self._attr_icon = "mdi:battery-lock"
         self._attr_device_info = device_info
 
@@ -300,7 +304,7 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
             # Get duration from number entity (default: 480 minutes = 8 hours)
             duration = int(safe_get_entity_float(
                 self._hass,
-                "number.neovolt_inverter_prevent_solar_charging_duration",
+                f"number.neovolt_{self._device_name}_prevent_solar_charging_duration",
                 480.0
             ))
             duration_seconds = duration * 60

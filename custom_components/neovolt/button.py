@@ -23,24 +23,25 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     client = hass.data[DOMAIN][entry.entry_id]["client"]
-    
+    device_name = hass.data[DOMAIN][entry.entry_id]["device_name"]
+
     buttons = [
-        NeovoltStopForceChargeDischargeButton(coordinator, device_info, client, hass),
+        NeovoltStopForceChargeDischargeButton(coordinator, device_info, device_name, client, hass),
     ]
-    
+
     async_add_entities(buttons)
 
 
 class NeovoltStopForceChargeDischargeButton(CoordinatorEntity, ButtonEntity):
     """Stop Force Charge/Discharge button - stops all force charge/discharge operations."""
 
-    def __init__(self, coordinator, device_info, client, hass):
+    def __init__(self, coordinator, device_info, device_name, client, hass):
         """Initialize the button."""
         super().__init__(coordinator)
         self._client = client
         self._hass = hass
-        self._attr_name = "Neovolt Inverter Stop Force Charge/Discharge"
-        self._attr_unique_id = "neovolt_inverter_stop_force_charge_discharge"
+        self._attr_name = f"Neovolt {device_name} Stop Force Charge/Discharge"
+        self._attr_unique_id = f"neovolt_{device_name}_stop_force_charge_discharge"
         self._attr_icon = "mdi:stop-circle"
         self._attr_device_info = device_info
 
