@@ -40,8 +40,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if new_data != entry.data:
         hass.config_entries.async_update_entry(entry, data=new_data)
 
-    device_name = entry.data.get(CONF_DEVICE_NAME, "inverter")
-    device_role = entry.data.get(CONF_DEVICE_ROLE, DEVICE_ROLE_HOST)
+    # Read from new_data to ensure we have migrated values
+    device_name = new_data.get(CONF_DEVICE_NAME, "inverter")
+    device_role = new_data.get(CONF_DEVICE_ROLE, DEVICE_ROLE_HOST)
 
     coordinator = NeovoltDataUpdateCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
