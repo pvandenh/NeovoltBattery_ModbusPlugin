@@ -36,19 +36,27 @@ class NeovoltModbusClient:
     def _enforce_command_interval(self):
         """
         Enforce minimum command interval required by protocol.
-        
+
         BYTEWATT protocol requires >300ms between commands.
         This prevents overwhelming the device and ensures reliable communication.
+        Thread-safe: uses lock to protect _last_command_time access.
         """
-        current_time = time.time()
-        time_since_last = current_time - self._last_command_time
-        
-        if time_since_last < PROTOCOL_COMMAND_INTERVAL:
-            sleep_time = PROTOCOL_COMMAND_INTERVAL - time_since_last
+        with self._lock:
+            current_time = time.time()
+            time_since_last = current_time - self._last_command_time
+
+            if time_since_last < PROTOCOL_COMMAND_INTERVAL:
+                sleep_time = PROTOCOL_COMMAND_INTERVAL - time_since_last
+            else:
+                sleep_time = 0
+
+            # Update timestamp while holding lock
+            self._last_command_time = time.time()
+
+        # Sleep outside lock to avoid blocking other operations
+        if sleep_time > 0:
             _LOGGER.debug(f"Enforcing protocol delay: {sleep_time:.3f}s")
             time.sleep(sleep_time)
-        
-        self._last_command_time = time.time()
 
     @staticmethod
     def _is_transient_error(exception):
@@ -195,11 +203,15 @@ class NeovoltModbusClient:
                 time.sleep(0.1)
             else:
                 _LOGGER.error(f"Failed to connect to Modbus device at {self.host}:{self.port}")
-            
+                # Clear client on failure to avoid stale state
+                self.client = None
+
             return connected
-            
+
         except Exception as e:
             _LOGGER.error(f"Connection error for {self.host}:{self.port}: {e}")
+            # Clear client on exception to avoid stale state
+            self.client = None
             return False
     
     def test_connection(self):
@@ -218,13 +230,16 @@ class NeovoltModbusClient:
                     if not self.connect():
                         return False
 
+                # Create local reference while holding lock (consistent with other methods)
+                client_ref = self.client
+
             _LOGGER.info("TCP connected! Reading SOC register...")
 
             # Enforce protocol delay before reading
             self._enforce_command_interval()
 
             # CORRECT pymodbus 3.x API - uses device_id parameter (not slave/unit)
-            result = self.client.read_holding_registers(
+            result = client_ref.read_holding_registers(
                 address=0x0102,         # Battery SOC register
                 count=1,                # Read 1 register
                 device_id=self.slave_id # pymodbus 3.x uses 'device_id' not 'slave' or 'unit'
@@ -429,7 +444,7 @@ class NeovoltModbusClient:
         """Close the Modbus connection."""
         with self._lock:
             self._is_closing = True  # Signal that we're closing
-            
+
             if self.client:
                 try:
                     self.client.close()
@@ -438,5 +453,42 @@ class NeovoltModbusClient:
                     _LOGGER.debug(f"Error closing connection (ignored): {e}")
                 finally:
                     self.client = None
-            
+
             self._is_closing = False  # Reset flag after cleanup
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if client is currently connected."""
+        with self._lock:
+            return self.client is not None and self.client.connected
+
+    def force_reconnect(self) -> bool:
+        """
+        Force close and reconnect the Modbus connection.
+
+        Used for auto-recovery when the connection appears stuck.
+        Resets error tracking state to give a fresh start.
+
+        Returns:
+            True if reconnection successful, False otherwise
+        """
+        _LOGGER.info(f"Force reconnecting to {self.host}:{self.port}")
+
+        with self._lock:
+            self._is_closing = True  # Signal that we're closing
+
+            # Close existing connection if any
+            if self.client:
+                try:
+                    self.client.close()
+                except Exception as e:
+                    _LOGGER.debug(f"Error closing client during force reconnect: {e}")
+                self.client = None
+
+            # Reset error tracking for fresh start
+            self._last_error = None
+            self._consecutive_errors = 0
+            self._is_closing = False  # Reset flag
+
+        # Attempt reconnection
+        return self.connect()

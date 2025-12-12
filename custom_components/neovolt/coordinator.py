@@ -1,8 +1,12 @@
 """DataUpdateCoordinator for Neovolt Solar Inverter."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta, datetime
+from typing import Any, Dict, List, Optional
+
+from pymodbus.exceptions import ModbusException
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
@@ -10,12 +14,26 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, CONF_SLAVE_ID
+from .const import (
+    DOMAIN,
+    CONF_SLAVE_ID,
+    CONF_MIN_POLL_INTERVAL,
+    CONF_MAX_POLL_INTERVAL,
+    CONF_CONSECUTIVE_FAILURE_THRESHOLD,
+    CONF_STALENESS_THRESHOLD,
+    DEFAULT_MIN_POLL_INTERVAL,
+    DEFAULT_MAX_POLL_INTERVAL,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_CONSECUTIVE_FAILURES,
+    DEFAULT_STALENESS_THRESHOLD,
+    RECOVERY_COOLDOWN_SECONDS,
+    REGISTER_BLOCKS,
+)
 from .modbus_client import NeovoltModbusClient
 
 _LOGGER = logging.getLogger(__name__)
 
-# Update interval - how often to poll the inverter
+# Base update interval - coordinator runs at min interval, but blocks are polled adaptively
 UPDATE_INTERVAL = timedelta(seconds=10)
 
 # Minimum time between persistent data saves (prevents excessive writes)
@@ -28,6 +46,144 @@ STORAGE_LAST_KNOWN_TOTAL = "last_known_total_energy"
 STORAGE_DAILY_PRESERVED = "daily_energy_before_unavailable"
 
 
+class AdaptivePollingManager:
+    """Manages adaptive polling intervals per register block."""
+
+    def __init__(
+        self,
+        min_interval: int = DEFAULT_MIN_POLL_INTERVAL,
+        max_interval: int = DEFAULT_MAX_POLL_INTERVAL,
+        default_interval: int = DEFAULT_POLL_INTERVAL,
+    ):
+        """Initialize the adaptive polling manager."""
+        self.min_interval = max(min_interval, 10)  # Hard cap at 10s minimum
+        self.max_interval = max_interval
+        self.default_interval = default_interval
+        self.block_intervals: Dict[str, float] = {}
+        self.block_last_poll: Dict[str, datetime] = {}
+        self.block_last_values: Dict[str, Dict[str, Any]] = {}
+        self.block_consecutive_failures: Dict[str, int] = {}
+
+    def should_poll_block(self, block_name: str, now: datetime) -> bool:
+        """Check if enough time has elapsed to poll this block."""
+        last_poll = self.block_last_poll.get(block_name)
+        if last_poll is None:
+            return True
+        interval = self.block_intervals.get(block_name, self.default_interval)
+        elapsed = (now - last_poll).total_seconds()
+        return elapsed >= interval
+
+    def update_after_poll(
+        self, block_name: str, new_values: Dict[str, Any], now: datetime
+    ) -> bool:
+        """
+        Update interval based on whether values changed.
+
+        Returns True if values changed, False otherwise.
+        """
+        old_values = self.block_last_values.get(block_name, {})
+        values_changed = new_values != old_values
+
+        current = self.block_intervals.get(block_name, self.default_interval)
+        if values_changed:
+            # Values changed → poll faster (10% decrease), cap at min
+            new_interval = max(current * 0.9, self.min_interval)
+        else:
+            # No changes → poll slower (10% increase), cap at max
+            new_interval = min(current * 1.1, self.max_interval)
+
+        self.block_intervals[block_name] = new_interval
+        self.block_last_poll[block_name] = now
+        self.block_last_values[block_name] = new_values.copy()
+
+        return values_changed
+
+    def get_cached_values(self, block_name: str) -> Dict[str, Any]:
+        """Get cached values for a block that wasn't polled this cycle."""
+        return self.block_last_values.get(block_name, {})
+
+    def get_block_interval(self, block_name: str) -> float:
+        """Get current polling interval for a block."""
+        return self.block_intervals.get(block_name, self.default_interval)
+
+    def record_block_failure(self, block_name: str) -> int:
+        """Record a failed block read. Returns consecutive failure count."""
+        self.block_consecutive_failures[block_name] = \
+            self.block_consecutive_failures.get(block_name, 0) + 1
+        return self.block_consecutive_failures[block_name]
+
+    def reset_block_failures(self, block_name: str) -> None:
+        """Reset failure count on successful read."""
+        self.block_consecutive_failures[block_name] = 0
+
+    def get_block_failures(self, block_name: str) -> int:
+        """Get consecutive failure count for a block."""
+        return self.block_consecutive_failures.get(block_name, 0)
+
+
+class RecoveryManager:
+    """Manages auto-recovery from stuck states."""
+
+    def __init__(
+        self,
+        max_consecutive_failures: int = DEFAULT_CONSECUTIVE_FAILURES,
+        staleness_threshold_minutes: int = DEFAULT_STALENESS_THRESHOLD,
+        cooldown_seconds: int = RECOVERY_COOLDOWN_SECONDS,
+    ):
+        """Initialize the recovery manager."""
+        self.max_consecutive_failures = max_consecutive_failures
+        self.staleness_threshold_minutes = staleness_threshold_minutes
+        self.cooldown_seconds = cooldown_seconds
+
+        self.consecutive_failures: int = 0
+        self.last_successful_update: Optional[datetime] = None
+        self.last_data_change: Optional[datetime] = None
+        self.last_recovery: Optional[datetime] = None
+        self.recovery_count: int = 0
+
+    def record_success(self, data_changed: bool, now: datetime) -> None:
+        """Record a successful update."""
+        self.consecutive_failures = 0
+        self.last_successful_update = now
+        if data_changed:
+            self.last_data_change = now
+
+    def record_failure(self) -> None:
+        """Record a failed update."""
+        self.consecutive_failures += 1
+
+    def should_trigger_recovery(self, now: datetime) -> tuple[bool, str]:
+        """
+        Check if recovery should be triggered.
+
+        Returns (should_recover, reason).
+        """
+        # Check cooldown
+        if self.last_recovery is not None:
+            cooldown_elapsed = (now - self.last_recovery).total_seconds()
+            if cooldown_elapsed < self.cooldown_seconds:
+                return False, ""
+
+        # Check consecutive failures
+        if self.consecutive_failures >= self.max_consecutive_failures:
+            return True, f"consecutive_failures ({self.consecutive_failures})"
+
+        # Check data staleness
+        if self.last_data_change is not None:
+            staleness_seconds = (now - self.last_data_change).total_seconds()
+            staleness_minutes = staleness_seconds / 60.0
+            if staleness_minutes >= self.staleness_threshold_minutes:
+                return True, f"data_stale ({staleness_minutes:.1f} minutes)"
+
+        return False, ""
+
+    def record_recovery_attempt(self, now: datetime) -> None:
+        """Record that recovery was attempted."""
+        self.recovery_count += 1
+        self.last_recovery = now
+        self.consecutive_failures = 0  # Reset failure counter
+
+
 class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching Neovolt data."""
 
@@ -37,21 +193,43 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         self.host = entry.data[CONF_HOST]
         self.port = entry.data[CONF_PORT]
         self.slave_id = entry.data[CONF_SLAVE_ID]
-        
+
         self.client = NeovoltModbusClient(
             host=self.host,
             port=self.port,
             slave_id=self.slave_id,
         )
 
+        # Get polling configuration from entry data (with defaults for migration)
+        min_interval = entry.data.get(CONF_MIN_POLL_INTERVAL, DEFAULT_MIN_POLL_INTERVAL)
+        max_interval = entry.data.get(CONF_MAX_POLL_INTERVAL, DEFAULT_MAX_POLL_INTERVAL)
+        consecutive_failures = entry.data.get(
+            CONF_CONSECUTIVE_FAILURE_THRESHOLD, DEFAULT_CONSECUTIVE_FAILURES
+        )
+        staleness_threshold = entry.data.get(
+            CONF_STALENESS_THRESHOLD, DEFAULT_STALENESS_THRESHOLD
+        )
+
+        # Initialize adaptive polling manager
+        self.polling_manager = AdaptivePollingManager(
+            min_interval=min_interval,
+            max_interval=max_interval,
+            default_interval=DEFAULT_POLL_INTERVAL,
+        )
+
+        # Initialize recovery manager
+        self.recovery_manager = RecoveryManager(
+            max_consecutive_failures=consecutive_failures,
+            staleness_threshold_minutes=staleness_threshold,
+        )
+
         # Debouncing for persistent data saves
         self._last_save_time = None
-        self._pending_save = False
 
         # Load persistent values from config entry options
         # This ensures they survive Home Assistant restarts
         options = entry.options or {}
-        
+
         # Load last reset date (stored as ISO string)
         last_reset_str = options.get(STORAGE_LAST_RESET_DATE)
         if last_reset_str:
@@ -63,62 +241,70 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning(f"Invalid stored reset date: {last_reset_str}")
         else:
             self._last_reset_date = None
-        
+
         # Load midnight baseline
         self._pv_inverter_energy_at_midnight = options.get(STORAGE_MIDNIGHT_BASELINE)
         if self._pv_inverter_energy_at_midnight is not None:
             _LOGGER.info(f"Restored midnight baseline: {self._pv_inverter_energy_at_midnight} kWh")
-        
+
         # Load last known total
         self._last_known_total_energy = options.get(STORAGE_LAST_KNOWN_TOTAL)
         if self._last_known_total_energy is not None:
             _LOGGER.info(f"Restored last known total: {self._last_known_total_energy} kWh")
-        
+
         # Load preserved daily value
         self._daily_energy_before_unavailable = options.get(STORAGE_DAILY_PRESERVED)
         if self._daily_energy_before_unavailable is not None:
             _LOGGER.info(f"Restored preserved daily: {self._daily_energy_before_unavailable} kWh")
 
+        # Use min_interval as the base coordinator update interval
+        update_interval = timedelta(seconds=min_interval)
+
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}_{entry.data[CONF_HOST]}",
-            update_interval=UPDATE_INTERVAL,
+            update_interval=update_interval,
         )
 
     def _save_persistent_data(self) -> None:
         """Save daily tracking data to config entry options with debouncing."""
-        now = datetime.now()
-        
+        now = dt_util.now()
+
         # Debounce: only save if enough time has passed since last save
         if self._last_save_time and (now - self._last_save_time) < SAVE_DEBOUNCE_INTERVAL:
-            # Mark that a save is pending but don't execute yet
-            self._pending_save = True
-            _LOGGER.debug(f"Debouncing save - {(now - self._last_save_time).seconds}s since last save")
+            _LOGGER.debug(
+                f"Debouncing save - {(now - self._last_save_time).total_seconds():.0f}s since last save"
+            )
             return
-        
-        # Reset pending flag and update last save time
-        self._pending_save = False
+
+        # Update last save time
         self._last_save_time = now
-        
+
         # Prepare data to save
         new_options = dict(self.entry.options or {})
-        
+
         # Save reset date as ISO string
         if self._last_reset_date:
             new_options[STORAGE_LAST_RESET_DATE] = self._last_reset_date.isoformat()
-        
+
         # Save numeric values
         if self._pv_inverter_energy_at_midnight is not None:
             new_options[STORAGE_MIDNIGHT_BASELINE] = self._pv_inverter_energy_at_midnight
-        
+
         if self._last_known_total_energy is not None:
             new_options[STORAGE_LAST_KNOWN_TOTAL] = self._last_known_total_energy
-        
+
         if self._daily_energy_before_unavailable is not None:
             new_options[STORAGE_DAILY_PRESERVED] = self._daily_energy_before_unavailable
-        
-        # Update config entry (this persists to storage)
+
+        # Schedule the async config entry update on the event loop
+        self.hass.async_create_task(
+            self._async_save_persistent_data(new_options)
+        )
+
+    async def _async_save_persistent_data(self, new_options: dict) -> None:
+        """Actually save the persistent data to config entry."""
         self.hass.config_entries.async_update_entry(
             self.entry,
             options=new_options
@@ -126,254 +312,321 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         _LOGGER.debug("Saved persistent daily tracking data")
 
     async def _async_update_data(self):
-        """Fetch data from the inverter."""
-        try:
-            return await self.hass.async_add_executor_job(self._fetch_data)
-        except Exception as err:
-            raise UpdateFailed(f"Error communicating with inverter: {err}") from err
+        """Fetch data from the inverter with adaptive polling and auto-recovery."""
+        now = dt_util.now()
 
-    def _fetch_data(self):
-        """Fetch data from Modbus (runs in executor)."""
-        data = {}
-
-        # Track which critical register blocks were successfully read
-        # Used to ensure data consistency for calculated values
-        successful_reads = {
-            "grid": False,
-            "pv": False,
-            "battery": False,
-        }
+        # Check if recovery is needed before polling
+        should_recover, reason = self.recovery_manager.should_trigger_recovery(now)
+        if should_recover:
+            _LOGGER.warning(f"Auto-recovery triggered: {reason}")
+            await self._perform_recovery()
+            self.recovery_manager.record_recovery_attempt(now)
 
         try:
-            # Grid data (0x0010-0x0036) - Using YAML addresses
-            grid_regs = self.client.read_holding_registers(0x0010, 39)
-            if grid_regs:
-                # 0x0010-0x0011: Total Energy Feed to Grid
-                data["grid_energy_feed"] = self._to_unsigned_32(grid_regs[0], grid_regs[1]) * 0.01
-                # 0x0012-0x0013: Total Energy Consume from Grid
-                data["grid_energy_consume"] = self._to_unsigned_32(grid_regs[2], grid_regs[3]) * 0.01
-                # 0x0014-0x0016: Grid Voltage Phase A, B, C (no scaling)
-                data["grid_voltage_a"] = grid_regs[4]
-                data["grid_voltage_b"] = grid_regs[5]
-                data["grid_voltage_c"] = grid_regs[6]
-                # 0x0017-0x0019: Grid Current Phase A, B, C (signed, scale 0.1)
-                data["grid_current_a"] = self._to_signed(grid_regs[7]) * 0.1
-                data["grid_current_b"] = self._to_signed(grid_regs[8]) * 0.1
-                data["grid_current_c"] = self._to_signed(grid_regs[9]) * 0.1
-                # 0x001A: Grid Frequency (scale 0.01)
-                data["grid_frequency"] = grid_regs[10] * 0.01
-                # 0x001B-0x001C: Grid Active Power Phase A (int32)
-                data["grid_power_a"] = self._to_signed_32(grid_regs[11], grid_regs[12])
-                # 0x001D-0x001E: Grid Active Power Phase B (int32)
-                data["grid_power_b"] = self._to_signed_32(grid_regs[13], grid_regs[14])
-                # 0x001F-0x0020: Grid Active Power Phase C (int32)
-                data["grid_power_c"] = self._to_signed_32(grid_regs[15], grid_regs[16])
-                # 0x0021-0x0022: Grid Total Active Power (int32)
-                data["grid_power_total"] = self._to_signed_32(grid_regs[17], grid_regs[18])
-                # 0x0036: Grid Power Factor (signed, scale 0.01)
-                data["grid_power_factor"] = self._to_signed(grid_regs[38]) * 0.01
-                successful_reads["grid"] = True
-            else:
-                _LOGGER.warning("Failed to read grid registers - grid data unavailable")
+            # Fetch data with adaptive polling
+            data, any_data_changed = await self.hass.async_add_executor_job(
+                self._fetch_data_adaptive, now
+            )
 
-            # PV data (0x0090-0x00A3) - AC-coupled PV meter
-            pv_regs = self.client.read_holding_registers(0x0090, 20)
-            if pv_regs:
-                # 0x0090-0x0091: PV Total Energy Feed to Grid (scale 0.01)
-                data["pv_energy_feed"] = self._to_unsigned_32(pv_regs[0], pv_regs[1]) * 0.01
-                # 0x0094: PV Voltage Phase A (no scaling)
-                data["pv_voltage_a"] = pv_regs[4]
-                # 0x00A1-0x00A2: PV Total Active Power (int32, no scaling) - AC-coupled only
-                data["pv_ac_power_total"] = self._to_signed_32(pv_regs[17], pv_regs[18])
-                successful_reads["pv"] = True
-            else:
-                _LOGGER.warning("Failed to read PV registers - PV data unavailable")
-                data["pv_ac_power_total"] = 0
+            # Record success for recovery manager
+            self.recovery_manager.record_success(any_data_changed, now)
 
-            # Battery data (0x0100-0x0127)
-            battery_regs = self.client.read_holding_registers(0x0100, 40)
-            if battery_regs:
-                # 0x0100: Battery Voltage (scale 0.1)
-                data["battery_voltage"] = battery_regs[0] * 0.1
-                # 0x0101: Battery Current (signed, scale 0.1)
-                data["battery_current"] = self._to_signed(battery_regs[1]) * 0.1
-                # 0x0102: Battery SOC (scale 0.1)
-                data["battery_soc"] = battery_regs[2] * 0.1
-                # 0x0107: Battery Min Cell Voltage (scale 0.001)
-                data["battery_min_cell_voltage"] = battery_regs[7] * 0.001
-                # 0x010A: Battery Max Cell Voltage (scale 0.001)
-                data["battery_max_cell_voltage"] = battery_regs[10] * 0.001
-                # NOTE: The Modbus reference documentation incorrectly states temperature
-                # scale as 0.01°C, but testing confirms the actual scale is 0.1°C.
-                # 0x010D: Battery Min Cell Temperature (signed, scale 0.1)
-                data["battery_min_cell_temp"] = self._to_signed(battery_regs[13]) * 0.1
-                # 0x0110: Battery Max Cell Temperature (signed, scale 0.1)
-                data["battery_max_cell_temp"] = self._to_signed(battery_regs[16]) * 0.1
-                # 0x0119: Battery Capacity (scale 0.1)
-                data["battery_capacity"] = battery_regs[25] * 0.1
-                # 0x011B: Battery SOH (scale 0.1)
-                data["battery_soh"] = battery_regs[27] * 0.1
-                # 0x0120-0x0121: Battery Charge Energy (scale 0.1)
-                data["battery_charge_energy"] = self._to_unsigned_32(battery_regs[32], battery_regs[33]) * 0.1
-                # 0x0122-0x0123: Battery Discharge Energy (scale 0.1)
-                data["battery_discharge_energy"] = self._to_unsigned_32(battery_regs[34], battery_regs[35]) * 0.1
-                # 0x0126: Battery Power (signed, no scaling)
-                data["battery_power"] = self._to_signed(battery_regs[38])
-                successful_reads["battery"] = True
-            else:
-                _LOGGER.warning("Failed to read battery registers - battery data unavailable")
-
-            # Inverter data (0x0500-0x056D)
-            inv_regs = self.client.read_holding_registers(0x0500, 110)
-            if inv_regs:
-                # 0x0502-0x0503: Total Energy INV Output (scale 0.1)
-                data["inv_energy_output"] = self._to_unsigned_32(inv_regs[2], inv_regs[3]) * 0.1
-                # 0x0504-0x0505: Total Energy INV Input (scale 0.1)
-                data["inv_energy_input"] = self._to_unsigned_32(inv_regs[4], inv_regs[5]) * 0.1
-                # 0x050A-0x050B: Total PV Energy (scale 0.1)
-                data["total_pv_energy"] = self._to_unsigned_32(inv_regs[10], inv_regs[11]) * 0.1
-                # 0x0510: Inverter Module Temperature (signed, scale 0.1)
-                data["inv_module_temp"] = self._to_signed(inv_regs[16]) * 0.1
-                # 0x0511: PV Boost Temperature (signed, scale 0.1)
-                data["pv_boost_temp"] = self._to_signed(inv_regs[17]) * 0.1
-                # 0x0512: Battery Buck Boost Temperature (signed, scale 0.1)
-                data["battery_buck_boost_temp"] = self._to_signed(inv_regs[18]) * 0.1
-                # 0x0520: Bus Voltage (scale 0.1)
-                data["bus_voltage"] = inv_regs[32] * 0.1
-                # 0x0524-0x0526: PV1/2/3 Voltage (scale 0.1)
-                data["pv1_voltage"] = inv_regs[36] * 0.1
-                data["pv2_voltage"] = inv_regs[37] * 0.1
-                data["pv3_voltage"] = inv_regs[38] * 0.1
-                # 0x0527-0x0529: PV1/2/3 Current (scale 0.01)
-                data["pv1_current"] = inv_regs[39] * 0.01
-                data["pv2_current"] = inv_regs[40] * 0.01
-                data["pv3_current"] = inv_regs[41] * 0.01
-                # 0x052A-0x052C: PV1/2/3 Power (no scaling)
-                data["pv1_power"] = inv_regs[42]
-                data["pv2_power"] = inv_regs[43]
-                data["pv3_power"] = inv_regs[44]
-                # 0x052D: Total DC PV Power (no scaling) - DC-coupled PV total
-                data["pv_dc_power_total"] = inv_regs[45]
-
-                # Combine DC + AC PV power for true total
-                # DC from 0x052D, AC from 0x00A1-0x00A2
-                data["pv_power_total"] = data.get("pv_dc_power_total", 0) + data.get("pv_ac_power_total", 0)
-
-                # 0x0545-0x0546: INV Active Power (int32, no scaling)
-                data["inv_power_active"] = self._to_signed_32(inv_regs[69], inv_regs[70])
-                # 0x055B-0x055C: Backup Power (int32, no scaling)
-                data["backup_power"] = self._to_signed_32(inv_regs[91], inv_regs[92])
-            else:
-                # Fallback: if inverter registers fail, use AC-only for pv_power_total
-                data["pv_dc_power_total"] = 0
-                data["pv_power_total"] = data.get("pv_ac_power_total", 0)
-
-            # AC-coupled PV (0x08D0) - CRITICAL FIX
-            pv_inv_regs = self.client.read_holding_registers(0x08D0, 2)
-            ac_pv_energy = None  # Track if we got a valid reading
-            
-            if pv_inv_regs:
-                # Successfully read register - use the value
-                ac_pv_energy = self._to_unsigned_32(pv_inv_regs[0], pv_inv_regs[1]) * 0.01
-                data["pv_inverter_energy"] = ac_pv_energy
-                # Update last known value
-                self._last_known_total_energy = ac_pv_energy
-                _LOGGER.debug(f"Read PV inverter energy: {ac_pv_energy} kWh")
-            else:
-                # Failed to read - use preserved value
-                _LOGGER.warning("Failed to read PV inverter energy register - using preserved value")
-                if self._last_known_total_energy is not None:
-                    ac_pv_energy = self._last_known_total_energy
-                    data["pv_inverter_energy"] = self._last_known_total_energy
-                    _LOGGER.info(f"Using last known PV inverter energy: {self._last_known_total_energy} kWh")
-                else:
-                    # No preserved value - first run after restart during outage
-                    ac_pv_energy = 0
-                    data["pv_inverter_energy"] = 0
-                    _LOGGER.warning("No preserved PV energy value available - using 0")
-
-            # Calculate combined daily PV energy (DC + AC)
-            # DC from total_pv_energy (0x050A), AC from pv_inverter_energy (0x08D0)
-            dc_pv_energy = data.get("total_pv_energy", 0)
-            combined_pv_energy = dc_pv_energy + (ac_pv_energy if ac_pv_energy is not None else 0)
-
-            # Track if we need to save persistent data
-            save_needed = False
-
-            # Calculate daily energy with proper handling of unavailability
-            if combined_pv_energy > 0:
-                daily_pv, data_changed = self._calculate_daily_pv_energy(combined_pv_energy)
-                data["pv_inverter_energy_today"] = daily_pv
-                if data_changed:
-                    save_needed = True
-                _LOGGER.debug(f"Calculated daily PV: {daily_pv} kWh (from combined: {combined_pv_energy} kWh)")
-            elif self._daily_energy_before_unavailable is not None:
-                # Source unavailable but we have preserved value
-                data["pv_inverter_energy_today"] = self._daily_energy_before_unavailable
-                _LOGGER.info(f"Preserving daily PV energy during unavailability: {self._daily_energy_before_unavailable} kWh")
-            else:
-                # No data at all - shouldn't happen but be defensive
-                data["pv_inverter_energy_today"] = 0
-                _LOGGER.warning("No PV energy data available - setting daily to 0")
-
-            # Save persistent data if anything changed (with debouncing)
-            if save_needed:
-                # Schedule save on the event loop (we're in executor thread)
-                self.hass.loop.call_soon_threadsafe(self._save_persistent_data)
-
-            # Settings (0x0800-0x0855)
-            settings_regs = self.client.read_holding_registers(0x0800, 86)
-            if settings_regs:
-                data["max_feed_to_grid"] = settings_regs[0]
-                # PV Capacity (0x0801-0x0802, 32-bit in Watts)
-                data["pv_capacity"] = (settings_regs[1] << 16) | settings_regs[2]
-                data["charging_cutoff_soc"] = settings_regs[85]
-                data["discharging_cutoff_soc"] = settings_regs[80]
-                data["time_period_control_flag"] = settings_regs[79]
-
-            # Dispatch status (0x0880-0x0888)
-            dispatch_regs = self.client.read_holding_registers(0x0880, 9)
-            if dispatch_regs:
-                data["dispatch_start"] = dispatch_regs[0]
-                # Power is offset by 32000 (negative = charging, positive = discharging)
-                power_raw = self._to_unsigned_32(dispatch_regs[1], dispatch_regs[2])
-                data["dispatch_power"] = power_raw - 32000
-
-            # Calculate house load only if we have all critical data
-            if all([successful_reads["pv"], successful_reads["battery"], successful_reads["grid"]]):
-                pv_power = data.get("pv_power_total", 0)
-                battery_power = data.get("battery_power", 0)
-                grid_power = data.get("grid_power_total", 0)
-
-                house_load = pv_power + battery_power + grid_power
-
-                # Handle negative house load (valid in multi-inverter systems)
-                if house_load < 0:
-                    _LOGGER.debug(
-                        f"House load calculation resulted in negative value ({house_load}W). "
-                        f"PV={pv_power}W, Battery={battery_power}W, Grid={grid_power}W. "
-                        "This is expected in multi-inverter setups where grid meter is system-wide."
-                    )
-                    data["total_house_load"] = house_load
-                    # Track excess export from unmonitored sources (e.g., slave inverter)
-                    data["excess_grid_export"] = abs(house_load)
-                else:
-                    data["total_house_load"] = house_load
-                    data["excess_grid_export"] = 0
-            else:
-                # Don't calculate house load if we're missing critical data
-                _LOGGER.debug("Insufficient data for house load calculation - setting to None")
-                data["total_house_load"] = None
-            
-            # Current PV production (sum of all strings)
-            data["current_pv_production"] = data.get("pv1_power", 0) + data.get("pv2_power", 0) + data.get("pv3_power", 0)
-
-            _LOGGER.debug(f"Successfully fetched data: {len(data)} keys")
             return data
 
-        except Exception as err:
-            _LOGGER.error(f"Error fetching data: {err}")
-            raise
+        except (UpdateFailed, ModbusException, ConnectionError, TimeoutError, OSError) as err:
+            self.recovery_manager.record_failure()
+            raise UpdateFailed(f"Error communicating with inverter: {err}") from err
+
+    async def _perform_recovery(self) -> None:
+        """Perform recovery by forcing a reconnection."""
+        _LOGGER.info("Performing auto-recovery: forcing Modbus reconnection")
+        try:
+            # Add 30 second timeout to prevent hanging indefinitely
+            success = await asyncio.wait_for(
+                self.hass.async_add_executor_job(self.client.force_reconnect),
+                timeout=30.0
+            )
+            if success:
+                _LOGGER.info("Auto-recovery: reconnection successful")
+            else:
+                _LOGGER.warning("Auto-recovery: reconnection failed")
+        except asyncio.TimeoutError:
+            _LOGGER.error("Auto-recovery: reconnection timed out after 30s")
+        except Exception as e:
+            _LOGGER.error(f"Auto-recovery: error during reconnection: {e}")
+
+    def _fetch_data_adaptive(self, now: datetime) -> tuple[Dict[str, Any], bool]:
+        """
+        Fetch data with adaptive polling per block.
+
+        Returns:
+            Tuple of (data dict, whether any data changed)
+        """
+        data = {}
+        any_data_changed = False
+        successful_reads = {"grid": False, "pv": False, "battery": False}
+        critical_blocks = {"grid", "pv", "battery"}
+
+        # Process each register block
+        for block_name in REGISTER_BLOCKS:
+            if self.polling_manager.should_poll_block(block_name, now):
+                # Poll this block
+                block_data = self._read_block(block_name)
+                if block_data:
+                    # Success - reset failure counter and update polling interval
+                    self.polling_manager.reset_block_failures(block_name)
+                    changed = self.polling_manager.update_after_poll(
+                        block_name, block_data, now
+                    )
+                    if changed:
+                        any_data_changed = True
+                    data.update(block_data)
+
+                    # Track successful reads for critical blocks
+                    if block_name in successful_reads:
+                        successful_reads[block_name] = True
+                else:
+                    # Read failed - track failure and use cached values
+                    failure_count = self.polling_manager.record_block_failure(block_name)
+                    cached = self.polling_manager.get_cached_values(block_name)
+                    data.update(cached)
+
+                    if block_name in critical_blocks:
+                        _LOGGER.warning(
+                            f"Block {block_name} read failed ({failure_count} consecutive), "
+                            f"using cached values"
+                        )
+                    else:
+                        _LOGGER.debug(f"Block {block_name} read failed, using cached values")
+            else:
+                # Use cached values for this block
+                cached = self.polling_manager.get_cached_values(block_name)
+                data.update(cached)
+
+                # Cached reads count as successful for dependency tracking
+                if block_name in successful_reads and cached:
+                    successful_reads[block_name] = True
+
+        # Check if any critical block has too many failures - flag for recovery
+        for block_name in critical_blocks:
+            failures = self.polling_manager.get_block_failures(block_name)
+            if failures >= self.recovery_manager.max_consecutive_failures:
+                _LOGGER.warning(
+                    f"Critical block {block_name} failed {failures} times, "
+                    f"triggering recovery"
+                )
+                # Reset the block failure counter to avoid repeated triggers
+                self.polling_manager.reset_block_failures(block_name)
+                # Force recovery on next cycle
+                self.recovery_manager.consecutive_failures = \
+                    self.recovery_manager.max_consecutive_failures
+
+        # Calculate derived values
+        self._calculate_derived_values(data, successful_reads)
+
+        _LOGGER.debug(
+            f"Adaptive fetch: {len(data)} keys, changed={any_data_changed}, "
+            f"intervals={self._get_interval_summary()}"
+        )
+
+        return data, any_data_changed
+
+    def _get_interval_summary(self) -> str:
+        """Get a summary of current block intervals for logging."""
+        intervals = []
+        for block_name in REGISTER_BLOCKS:
+            interval = self.polling_manager.get_block_interval(block_name)
+            intervals.append(f"{block_name[:3]}:{interval:.0f}s")
+        return ", ".join(intervals)
+
+    def _read_block(self, block_name: str) -> Dict[str, Any]:
+        """Read a specific register block and return parsed data."""
+        block = REGISTER_BLOCKS.get(block_name)
+        if not block:
+            return {}
+
+        regs = self.client.read_holding_registers(block.address, block.count)
+        if not regs:
+            return {}
+
+        # Parse registers based on block type
+        if block_name == "grid":
+            return self._parse_grid_registers(regs)
+        elif block_name == "pv":
+            return self._parse_pv_registers(regs)
+        elif block_name == "battery":
+            return self._parse_battery_registers(regs)
+        elif block_name == "inverter":
+            return self._parse_inverter_registers(regs)
+        elif block_name == "pv_inverter_energy":
+            return self._parse_pv_inverter_energy_registers(regs)
+        elif block_name == "settings":
+            return self._parse_settings_registers(regs)
+        elif block_name == "dispatch":
+            return self._parse_dispatch_registers(regs)
+
+        return {}
+
+    def _parse_grid_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse grid register block (0x0010-0x0036)."""
+        return {
+            "grid_energy_feed": self._to_unsigned_32(regs[0], regs[1]) * 0.01,
+            "grid_energy_consume": self._to_unsigned_32(regs[2], regs[3]) * 0.01,
+            "grid_voltage_a": regs[4],
+            "grid_voltage_b": regs[5],
+            "grid_voltage_c": regs[6],
+            "grid_current_a": self._to_signed(regs[7]) * 0.1,
+            "grid_current_b": self._to_signed(regs[8]) * 0.1,
+            "grid_current_c": self._to_signed(regs[9]) * 0.1,
+            "grid_frequency": regs[10] * 0.01,
+            "grid_power_a": self._to_signed_32(regs[11], regs[12]),
+            "grid_power_b": self._to_signed_32(regs[13], regs[14]),
+            "grid_power_c": self._to_signed_32(regs[15], regs[16]),
+            "grid_power_total": self._to_signed_32(regs[17], regs[18]),
+            "grid_power_factor": self._to_signed(regs[38]) * 0.01,
+        }
+
+    def _parse_pv_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse PV register block (0x0090-0x00A3)."""
+        return {
+            "pv_energy_feed": self._to_unsigned_32(regs[0], regs[1]) * 0.01,
+            "pv_voltage_a": regs[4],
+            "pv_ac_power_total": self._to_signed_32(regs[17], regs[18]),
+        }
+
+    def _parse_battery_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse battery register block (0x0100-0x0127)."""
+        return {
+            "battery_voltage": regs[0] * 0.1,
+            "battery_current": self._to_signed(regs[1]) * 0.1,
+            "battery_soc": regs[2] * 0.1,
+            "battery_min_cell_voltage": regs[7] * 0.001,
+            "battery_max_cell_voltage": regs[10] * 0.001,
+            "battery_min_cell_temp": self._to_signed(regs[13]) * 0.1,
+            "battery_max_cell_temp": self._to_signed(regs[16]) * 0.1,
+            "battery_capacity": regs[25] * 0.1,
+            "battery_soh": regs[27] * 0.1,
+            "battery_charge_energy": self._to_unsigned_32(regs[32], regs[33]) * 0.1,
+            "battery_discharge_energy": self._to_unsigned_32(regs[34], regs[35]) * 0.1,
+            "battery_power": self._to_signed(regs[38]),
+        }
+
+    def _parse_inverter_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse inverter register block (0x0500-0x056D)."""
+        return {
+            "inv_energy_output": self._to_unsigned_32(regs[2], regs[3]) * 0.1,
+            "inv_energy_input": self._to_unsigned_32(regs[4], regs[5]) * 0.1,
+            "total_pv_energy": self._to_unsigned_32(regs[10], regs[11]) * 0.1,
+            "inv_module_temp": self._to_signed(regs[16]) * 0.1,
+            "pv_boost_temp": self._to_signed(regs[17]) * 0.1,
+            "battery_buck_boost_temp": self._to_signed(regs[18]) * 0.1,
+            "bus_voltage": regs[32] * 0.1,
+            "pv1_voltage": regs[36] * 0.1,
+            "pv2_voltage": regs[37] * 0.1,
+            "pv3_voltage": regs[38] * 0.1,
+            "pv1_current": regs[39] * 0.01,
+            "pv2_current": regs[40] * 0.01,
+            "pv3_current": regs[41] * 0.01,
+            "pv1_power": regs[42],
+            "pv2_power": regs[43],
+            "pv3_power": regs[44],
+            "pv_dc_power_total": regs[45],
+            "inv_power_active": self._to_signed_32(regs[69], regs[70]),
+            "backup_power": self._to_signed_32(regs[91], regs[92]),
+        }
+
+    def _parse_pv_inverter_energy_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse PV inverter energy register block (0x08D0)."""
+        pv_inverter_total = self._to_unsigned_32(regs[0], regs[1]) * 0.01
+        return {"pv_inverter_energy": pv_inverter_total}
+
+    def _parse_settings_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse settings register block (0x0800-0x0855)."""
+        return {
+            "max_feed_to_grid": regs[0],
+            "pv_capacity": (regs[1] << 16) | regs[2],
+            "charging_cutoff_soc": regs[85],
+            "discharging_cutoff_soc": regs[80],
+            "time_period_control_flag": regs[79],
+        }
+
+    def _parse_dispatch_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse dispatch register block (0x0880-0x0888)."""
+        power_raw = self._to_unsigned_32(regs[1], regs[2])
+        return {
+            "dispatch_start": regs[0],
+            "dispatch_power": power_raw - 32000,
+        }
+
+    def _calculate_derived_values(
+        self, data: Dict[str, Any], successful_reads: Dict[str, bool]
+    ) -> None:
+        """Calculate derived values from the fetched data."""
+        # Combined PV power (DC + AC)
+        pv_dc = data.get("pv_dc_power_total", 0)
+        pv_ac = data.get("pv_ac_power_total", 0)
+        data["pv_power_total"] = pv_dc + pv_ac
+
+        # Current PV production (sum of all strings)
+        data["current_pv_production"] = (
+            data.get("pv1_power", 0) +
+            data.get("pv2_power", 0) +
+            data.get("pv3_power", 0)
+        )
+
+        # Daily PV energy calculation
+        pv_inverter_total = data.get("pv_inverter_energy", 0)
+        if pv_inverter_total:
+            self._last_known_total_energy = pv_inverter_total
+
+        dc_pv_energy = data.get("total_pv_energy", 0)
+        ac_pv_energy = data.get("pv_inverter_energy", pv_inverter_total)
+        combined_pv_energy = dc_pv_energy + ac_pv_energy
+
+        if combined_pv_energy > 0:
+            daily_energy, data_changed_today = self._calculate_daily_pv_energy(
+                combined_pv_energy
+            )
+            data["pv_inverter_energy_today"] = daily_energy
+            # If daily PV data changed, schedule a save
+            if data_changed_today:
+                self.hass.loop.call_soon_threadsafe(self._save_persistent_data)
+        elif self._daily_energy_before_unavailable is not None:
+            data["pv_inverter_energy_today"] = self._daily_energy_before_unavailable
+
+        # House load calculation - calculate with available data
+        pv_power = data.get("pv_power_total", 0)
+        battery_power = data.get("battery_power", 0)
+        grid_power = data.get("grid_power_total", 0)
+
+        # Count available power sources
+        available_sources = sum([
+            successful_reads.get("pv", False),
+            successful_reads.get("battery", False),
+            successful_reads.get("grid", False),
+        ])
+
+        if available_sources >= 2:
+            # Need at least 2 of 3 sources for a reasonable estimate
+            house_load = pv_power + battery_power + grid_power
+
+            if house_load < 0:
+                _LOGGER.debug(
+                    f"House load negative ({house_load}W) - expected in multi-inverter setups"
+                )
+                data["total_house_load"] = house_load
+                data["excess_grid_export"] = abs(house_load)
+            else:
+                data["total_house_load"] = house_load
+                data["excess_grid_export"] = 0
+
+            # Flag if this is an estimated value (missing one source)
+            data["house_load_estimated"] = available_sources < 3
+        else:
+            # Not enough data for reliable calculation
+            data["total_house_load"] = None
+            data["house_load_estimated"] = None
+            data["excess_grid_export"] = 0
 
     def _calculate_daily_pv_energy(self, total_energy: float) -> tuple[float, bool]:
         """
@@ -452,14 +705,14 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             return 0.0, data_changed
 
     @staticmethod
-    def _to_signed(value):
+    def _to_signed(value: int) -> int:
         """Convert unsigned 16-bit to signed."""
         if value > 32767:
             return value - 65536
         return value
 
     @staticmethod
-    def _to_signed_32(high, low):
+    def _to_signed_32(high: int, low: int) -> int:
         """Convert two 16-bit registers to signed 32-bit."""
         value = (high << 16) | low
         if value > 2147483647:
@@ -467,6 +720,6 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         return value
 
     @staticmethod
-    def _to_unsigned_32(high, low):
+    def _to_unsigned_32(high: int, low: int) -> int:
         """Convert two 16-bit registers to unsigned 32-bit."""
         return (high << 16) | low

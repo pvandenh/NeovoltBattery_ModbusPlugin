@@ -16,6 +16,7 @@ from .const import (
     CONF_MAX_DISCHARGE_POWER,
     DEFAULT_MAX_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
+    DEVICE_ROLE_FOLLOWER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,77 +28,84 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Neovolt numbers."""
+    device_role = hass.data[DOMAIN][entry.entry_id]["device_role"]
+
+    # Skip control entities for follower devices
+    if device_role == DEVICE_ROLE_FOLLOWER:
+        return
+
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     client = hass.data[DOMAIN][entry.entry_id]["client"]
-    
+    device_name = hass.data[DOMAIN][entry.entry_id]["device_name"]
+
     # Get max power from config entry
     max_charge_power = entry.data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
     max_discharge_power = entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
-    
+
     numbers = [
         # System Settings (write to Modbus)
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "max_feed_to_grid", "Max Feed to Grid Power",
             0, 100, 1, PERCENTAGE, 0x0800, True
         ),
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "charging_cutoff_soc", "Charging Cutoff SOC",
             10, 100, 1, PERCENTAGE, 0x0855, True
         ),
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "discharging_cutoff_soc", "Discharging Cutoff SOC (Default)",
             4, 100, 1, PERCENTAGE, 0x0850, True
         ),
-        
+
         # Force Charging Controls (local storage, used by switch) - WITH DYNAMIC MAX
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "force_charging_power", "Force Charging Power",
             0.5, max_charge_power, 0.1, UnitOfPower.KILO_WATT, None, False,
             default_value=min(3.0, max_charge_power), icon="mdi:lightning-bolt",
             config_entry=entry
         ),
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "force_charging_duration", "Force Charging Duration",
             1, 480, 1, UnitOfTime.MINUTES, None, False,
             default_value=120, icon="mdi:timer"
         ),
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "charging_soc_target", "Charging SOC Target",
             10, 100, 1, PERCENTAGE, None, False,
             default_value=100, icon="mdi:battery-charging-100"
         ),
-        
+
         # Force Discharging Controls (local storage, used by switch) - WITH DYNAMIC MAX
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "force_discharging_power", "Force Discharging Power",
             0.5, max_discharge_power, 0.1, UnitOfPower.KILO_WATT, None, False,
             default_value=min(3.0, max_discharge_power), icon="mdi:lightning-bolt-outline",
             config_entry=entry
         ),
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "force_discharging_duration", "Force Discharging Duration",
             1, 480, 1, UnitOfTime.MINUTES, None, False,
             default_value=120, icon="mdi:timer-outline"
         ),
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "discharging_soc_cutoff", "Discharging SOC Cutoff",
             4, 50, 1, PERCENTAGE, None, False,
             default_value=20, icon="mdi:battery-charging-20"
         ),
-        
+
         # Prevent Solar Charging Controls (local storage, used by switch)
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "prevent_solar_charging_duration", "Prevent Solar Charging Duration",
             1, 1440, 1, UnitOfTime.MINUTES, None, False,
             default_value=480, icon="mdi:timer-lock"
@@ -105,13 +113,13 @@ async def async_setup_entry(
 
         # PV Capacity (32-bit register, in Watts)
         NeovoltNumber(
-            coordinator, device_info, client, hass,
+            coordinator, device_info, device_name, client, hass,
             "pv_capacity", "PV Capacity",
             0, max_charge_power * 1000, 100, UnitOfPower.WATT, 0x0801, True,
             icon="mdi:solar-power", config_entry=entry, is_32bit=True
         ),
     ]
-    
+
     async_add_entities(numbers)
 
 
@@ -122,6 +130,7 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         self,
         coordinator,
         device_info,
+        device_name,
         client,
         hass,
         key,
@@ -148,8 +157,8 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         self._config_entry = config_entry
         self._is_32bit = is_32bit
         self._scale = scale
-        self._attr_name = f"Neovolt Inverter {name}"
-        self._attr_unique_id = f"neovolt_inverter_{key}"
+        self._attr_name = f"Neovolt {device_name} {name}"
+        self._attr_unique_id = f"neovolt_{device_name}_{key}"
         self._attr_native_min_value = min_val
         self._attr_native_max_value = max_val
         self._attr_native_step = step

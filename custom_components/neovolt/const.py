@@ -1,4 +1,5 @@
 """Constants for the Neovolt Solar Inverter integration."""
+from dataclasses import dataclass
 
 DOMAIN = "neovolt"
 
@@ -7,6 +8,12 @@ DEFAULT_PORT = 502
 DEFAULT_SLAVE_ID = 85
 
 CONF_SLAVE_ID = "slave_id"
+CONF_DEVICE_NAME = "device_name"
+CONF_DEVICE_ROLE = "device_role"
+
+# Device roles
+DEVICE_ROLE_HOST = "host"
+DEVICE_ROLE_FOLLOWER = "follower"
 
 # Max power configuration
 CONF_MAX_CHARGE_POWER = "max_charge_power"
@@ -44,3 +51,42 @@ DISPATCH_DURATION_DEFAULT = 90
 # Format: [mode, reserved, charge_power, reserved, discharge_power, soc_mode, soc_value, reserved, duration]
 # This command resets to idle state with 90s timeout
 DISPATCH_RESET_VALUES = [0, 0, MODBUS_OFFSET, 0, MODBUS_OFFSET, 0, 0, 0, DISPATCH_DURATION_DEFAULT]
+
+# Polling configuration
+CONF_MIN_POLL_INTERVAL = "min_poll_interval"
+CONF_MAX_POLL_INTERVAL = "max_poll_interval"
+CONF_CONSECUTIVE_FAILURE_THRESHOLD = "consecutive_failure_threshold"
+CONF_STALENESS_THRESHOLD = "staleness_threshold"
+
+# Polling defaults
+DEFAULT_MIN_POLL_INTERVAL = 10    # seconds (hard minimum)
+DEFAULT_MAX_POLL_INTERVAL = 300   # 5 minutes
+DEFAULT_POLL_INTERVAL = 30        # starting interval for all blocks
+DEFAULT_CONSECUTIVE_FAILURES = 5
+DEFAULT_STALENESS_THRESHOLD = 10  # minutes
+RECOVERY_COOLDOWN_SECONDS = 60    # cooldown between recovery attempts
+
+# Hard limits for polling configuration
+MIN_POLL_INTERVAL_LIMIT = 10      # Cannot go below 10 seconds
+MAX_POLL_INTERVAL_LIMIT = 3600    # Cannot exceed 1 hour
+
+
+@dataclass
+class RegisterBlock:
+    """Definition of a Modbus register block for polling."""
+    name: str
+    address: int
+    count: int
+
+
+# Register blocks for adaptive polling
+# Each block is polled independently with its own adaptive interval
+REGISTER_BLOCKS = {
+    "grid": RegisterBlock("grid", 0x0010, 39),
+    "pv": RegisterBlock("pv", 0x0090, 20),
+    "battery": RegisterBlock("battery", 0x0100, 40),
+    "inverter": RegisterBlock("inverter", 0x0500, 110),
+    "pv_inverter_energy": RegisterBlock("pv_inverter_energy", 0x08D0, 2),
+    "settings": RegisterBlock("settings", 0x0800, 86),
+    "dispatch": RegisterBlock("dispatch", 0x0880, 9),
+}

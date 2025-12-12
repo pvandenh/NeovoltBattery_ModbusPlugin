@@ -3,26 +3,55 @@
     "step": {
       "user": {
         "title": "Neovolt Solar Inverter",
-        "description": "Configure your Neovolt inverter Modbus TCP connection.\n\nMake sure your Modbus gateway (e.g., EW11A) is:\n- Connected to the same network as Home Assistant\n- Configured in TCP Server mode\n- Port 502 is open and accessible\n\nFor parallel/master-slave setups, set the maximum power values to the total combined capacity of all inverters.",
+        "description": "Configure your Neovolt inverter Modbus TCP connection.\n\nMake sure your Modbus gateway (e.g., EW11A) is:\n- Connected to the same network as Home Assistant\n- Configured in TCP Server mode\n- Port 502 is open and accessible",
         "data": {
           "host": "Host (IP Address)",
           "port": "Modbus TCP Port",
           "slave_id": "Modbus Slave ID",
-          "max_charge_power": "Maximum Charge Power (kW)",
-          "max_discharge_power": "Maximum Discharge Power (kW)"
+          "device_name": "Device Name (optional)",
+          "device_role": "Device Role"
         },
         "data_description": {
           "host": "IP address of your Modbus TCP gateway (e.g., 192.168.1.100)",
           "port": "Usually 502 for Modbus TCP",
           "slave_id": "Usually 85 (0x55) for Neovolt inverters",
+          "device_name": "Optional name to identify this device. Leave empty for auto-numbering (1, 2, 3...)",
+          "device_role": "Host: full control (settings + commands). Follower: read-only sensors only"
+        }
+      },
+      "power": {
+        "title": "Power Limits",
+        "description": "Configure power limits for your inverter system.\n\nFor parallel/master-slave setups, set the maximum power values to the total combined capacity of all inverters.",
+        "data": {
+          "max_charge_power": "Maximum Charge Power (kW)",
+          "max_discharge_power": "Maximum Discharge Power (kW)"
+        },
+        "data_description": {
           "max_charge_power": "Maximum charging power in kW. For parallel systems, enter total capacity (e.g., 15 for three 5kW units)",
           "max_discharge_power": "Maximum discharging power in kW. For parallel systems, enter total capacity"
+        }
+      },
+      "polling": {
+        "title": "Polling & Recovery",
+        "description": "Configure adaptive polling intervals and auto-recovery settings.\n\nPolling automatically speeds up for changing values and slows down for stable values.",
+        "data": {
+          "min_poll_interval": "Minimum Poll Interval (seconds)",
+          "max_poll_interval": "Maximum Poll Interval (seconds)",
+          "consecutive_failure_threshold": "Recovery: Consecutive Failures",
+          "staleness_threshold": "Recovery: Data Staleness (minutes)"
+        },
+        "data_description": {
+          "min_poll_interval": "Fastest polling rate for active values (hard minimum: 10s)",
+          "max_poll_interval": "Slowest polling rate for stable values",
+          "consecutive_failure_threshold": "Trigger auto-recovery after this many consecutive poll failures",
+          "staleness_threshold": "Trigger auto-recovery if data hasn't changed for this many minutes"
         }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect to the inverter.\n\nError: {error}\n\nTroubleshooting:\n1. Verify the IP address is correct\n2. Check that port 502 is accessible (firewall)\n3. Ensure Modbus gateway is powered on\n4. Verify gateway is in TCP Server mode\n5. Test with: ping [IP] from Home Assistant terminal",
-      "unknown": "Unexpected error occurred: {error}\n\nPlease check Home Assistant logs for details."
+      "unknown": "Unexpected error occurred: {error}\n\nPlease check Home Assistant logs for details.",
+      "min_exceeds_max": "Minimum poll interval cannot exceed maximum poll interval."
     },
     "abort": {
       "already_configured": "This device is already configured. Check Devices & Services."
@@ -31,7 +60,17 @@
   "options": {
     "step": {
       "init": {
-        "title": "Neovolt Inverter Options",
+        "title": "Device Role",
+        "description": "Select the role for this device.\n\nHost: Full control with settings and commands.\nFollower: Read-only sensors only.",
+        "data": {
+          "device_role": "Device Role"
+        },
+        "data_description": {
+          "device_role": "Host devices can control the inverter. Follower devices only read sensor data"
+        }
+      },
+      "power": {
+        "title": "Power Limits",
         "description": "Update power limits for your inverter system.\n\nFor parallel setups, enter the combined capacity of all inverters.\nChanges will take effect after reloading the integration.",
         "data": {
           "max_charge_power": "Maximum Charge Power (kW)",
@@ -40,6 +79,22 @@
         "data_description": {
           "max_charge_power": "Maximum charging power in kW. For parallel systems, enter total capacity",
           "max_discharge_power": "Maximum discharging power in kW. For parallel systems, enter total capacity"
+        }
+      },
+      "polling": {
+        "title": "Polling & Recovery",
+        "description": "Update adaptive polling intervals and auto-recovery settings.\n\nChanges will take effect after reloading the integration.",
+        "data": {
+          "min_poll_interval": "Minimum Poll Interval (seconds)",
+          "max_poll_interval": "Maximum Poll Interval (seconds)",
+          "consecutive_failure_threshold": "Recovery: Consecutive Failures",
+          "staleness_threshold": "Recovery: Data Staleness (minutes)"
+        },
+        "data_description": {
+          "min_poll_interval": "Fastest polling rate for active values (hard minimum: 10s)",
+          "max_poll_interval": "Slowest polling rate for stable values",
+          "consecutive_failure_threshold": "Trigger auto-recovery after this many consecutive poll failures",
+          "staleness_threshold": "Trigger auto-recovery if data hasn't changed for this many minutes"
         }
       }
     }
