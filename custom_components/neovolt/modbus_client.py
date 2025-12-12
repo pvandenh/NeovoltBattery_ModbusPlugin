@@ -444,7 +444,8 @@ class NeovoltModbusClient:
     @property
     def is_connected(self) -> bool:
         """Check if client is currently connected."""
-        return self.client is not None and self.client.connected
+        with self._lock:
+            return self.client is not None and self.client.connected
 
     def force_reconnect(self) -> bool:
         """

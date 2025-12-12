@@ -176,7 +176,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if user_input[CONF_DEVICE_ROLE] == DEVICE_ROLE_HOST:
                     return await self.async_step_power()
                 else:
-                    # Follower - skip power settings, go to polling
+                    # Follower - set default power values (required for data consistency)
+                    self._user_data[CONF_MAX_CHARGE_POWER] = DEFAULT_MAX_CHARGE_POWER
+                    self._user_data[CONF_MAX_DISCHARGE_POWER] = DEFAULT_MAX_DISCHARGE_POWER
                     return await self.async_step_polling()
 
             except CannotConnect as err:
@@ -217,21 +219,28 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the polling configuration step."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            # Merge polling settings with user data
-            self._user_data[CONF_MIN_POLL_INTERVAL] = user_input[CONF_MIN_POLL_INTERVAL]
-            self._user_data[CONF_MAX_POLL_INTERVAL] = user_input[CONF_MAX_POLL_INTERVAL]
-            self._user_data[CONF_CONSECUTIVE_FAILURE_THRESHOLD] = user_input[CONF_CONSECUTIVE_FAILURE_THRESHOLD]
-            self._user_data[CONF_STALENESS_THRESHOLD] = user_input[CONF_STALENESS_THRESHOLD]
+            # Validate min <= max poll interval
+            if user_input[CONF_MIN_POLL_INTERVAL] > user_input[CONF_MAX_POLL_INTERVAL]:
+                errors["base"] = "min_exceeds_max"
+            else:
+                # Merge polling settings with user data
+                self._user_data[CONF_MIN_POLL_INTERVAL] = user_input[CONF_MIN_POLL_INTERVAL]
+                self._user_data[CONF_MAX_POLL_INTERVAL] = user_input[CONF_MAX_POLL_INTERVAL]
+                self._user_data[CONF_CONSECUTIVE_FAILURE_THRESHOLD] = user_input[CONF_CONSECUTIVE_FAILURE_THRESHOLD]
+                self._user_data[CONF_STALENESS_THRESHOLD] = user_input[CONF_STALENESS_THRESHOLD]
 
-            device_name = self._user_data[CONF_DEVICE_NAME]
-            title = f"Neovolt {device_name}"
+                device_name = self._user_data[CONF_DEVICE_NAME]
+                title = f"Neovolt {device_name}"
 
-            return self.async_create_entry(title=title, data=self._user_data)
+                return self.async_create_entry(title=title, data=self._user_data)
 
         return self.async_show_form(
             step_id="polling",
             data_schema=STEP_POLLING_DATA_SCHEMA,
+            errors=errors,
         )
 
     @staticmethod
@@ -266,10 +275,9 @@ class NeovoltOptionsFlowHandler(config_entries.OptionsFlow):
             if new_role == DEVICE_ROLE_HOST:
                 return await self.async_step_power()
             else:
-                # Changing to follower - skip power, go to polling
-                # Remove power settings for followers (optional cleanup)
-                self._new_data.pop(CONF_MAX_CHARGE_POWER, None)
-                self._new_data.pop(CONF_MAX_DISCHARGE_POWER, None)
+                # Changing to follower - set default power values for data consistency
+                self._new_data[CONF_MAX_CHARGE_POWER] = DEFAULT_MAX_CHARGE_POWER
+                self._new_data[CONF_MAX_DISCHARGE_POWER] = DEFAULT_MAX_DISCHARGE_POWER
                 return await self.async_step_polling()
 
         # Show role selector
@@ -326,21 +334,28 @@ class NeovoltOptionsFlowHandler(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the options - step 3: polling settings."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            self._new_data[CONF_MIN_POLL_INTERVAL] = user_input[CONF_MIN_POLL_INTERVAL]
-            self._new_data[CONF_MAX_POLL_INTERVAL] = user_input[CONF_MAX_POLL_INTERVAL]
-            self._new_data[CONF_CONSECUTIVE_FAILURE_THRESHOLD] = user_input[CONF_CONSECUTIVE_FAILURE_THRESHOLD]
-            self._new_data[CONF_STALENESS_THRESHOLD] = user_input[CONF_STALENESS_THRESHOLD]
+            # Validate min <= max poll interval
+            if user_input[CONF_MIN_POLL_INTERVAL] > user_input[CONF_MAX_POLL_INTERVAL]:
+                errors["base"] = "min_exceeds_max"
+            else:
+                self._new_data[CONF_MIN_POLL_INTERVAL] = user_input[CONF_MIN_POLL_INTERVAL]
+                self._new_data[CONF_MAX_POLL_INTERVAL] = user_input[CONF_MAX_POLL_INTERVAL]
+                self._new_data[CONF_CONSECUTIVE_FAILURE_THRESHOLD] = user_input[CONF_CONSECUTIVE_FAILURE_THRESHOLD]
+                self._new_data[CONF_STALENESS_THRESHOLD] = user_input[CONF_STALENESS_THRESHOLD]
 
-            self.hass.config_entries.async_update_entry(
-                self.config_entry,
-                data=self._new_data,
-            )
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data=self._new_data,
+                )
 
-            return self.async_create_entry(title="", data={})
+                return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
             step_id="polling",
+            errors=errors,
             data_schema=vol.Schema(
                 {
                     vol.Required(

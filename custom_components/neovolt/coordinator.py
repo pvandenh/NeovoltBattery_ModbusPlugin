@@ -225,7 +225,6 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
         # Debouncing for persistent data saves
         self._last_save_time = None
-        self._pending_save = False
 
         # Load persistent values from config entry options
         # This ensures they survive Home Assistant restarts
@@ -270,37 +269,42 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
     def _save_persistent_data(self) -> None:
         """Save daily tracking data to config entry options with debouncing."""
-        now = datetime.now()
-        
+        now = dt_util.now()
+
         # Debounce: only save if enough time has passed since last save
         if self._last_save_time and (now - self._last_save_time) < SAVE_DEBOUNCE_INTERVAL:
-            # Mark that a save is pending but don't execute yet
-            self._pending_save = True
-            _LOGGER.debug(f"Debouncing save - {(now - self._last_save_time).seconds}s since last save")
+            _LOGGER.debug(
+                f"Debouncing save - {(now - self._last_save_time).total_seconds():.0f}s since last save"
+            )
             return
-        
-        # Reset pending flag and update last save time
-        self._pending_save = False
+
+        # Update last save time
         self._last_save_time = now
-        
+
         # Prepare data to save
         new_options = dict(self.entry.options or {})
-        
+
         # Save reset date as ISO string
         if self._last_reset_date:
             new_options[STORAGE_LAST_RESET_DATE] = self._last_reset_date.isoformat()
-        
+
         # Save numeric values
         if self._pv_inverter_energy_at_midnight is not None:
             new_options[STORAGE_MIDNIGHT_BASELINE] = self._pv_inverter_energy_at_midnight
-        
+
         if self._last_known_total_energy is not None:
             new_options[STORAGE_LAST_KNOWN_TOTAL] = self._last_known_total_energy
-        
+
         if self._daily_energy_before_unavailable is not None:
             new_options[STORAGE_DAILY_PRESERVED] = self._daily_energy_before_unavailable
-        
-        # Update config entry (this persists to storage)
+
+        # Schedule the async config entry update on the event loop
+        self.hass.async_create_task(
+            self._async_save_persistent_data(new_options)
+        )
+
+    async def _async_save_persistent_data(self, new_options: dict) -> None:
+        """Actually save the persistent data to config entry."""
         self.hass.config_entries.async_update_entry(
             self.entry,
             options=new_options
@@ -580,9 +584,13 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         combined_pv_energy = dc_pv_energy + ac_pv_energy
 
         if combined_pv_energy > 0:
-            data["pv_inverter_energy_today"] = self._calculate_daily_pv_energy(
+            daily_energy, data_changed_today = self._calculate_daily_pv_energy(
                 combined_pv_energy
             )
+            data["pv_inverter_energy_today"] = daily_energy
+            # If daily PV data changed, schedule a save
+            if data_changed_today:
+                self.hass.loop.call_soon_threadsafe(self._save_persistent_data)
         elif self._daily_energy_before_unavailable is not None:
             data["pv_inverter_energy_today"] = self._daily_energy_before_unavailable
 
@@ -697,14 +705,14 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             return 0.0, data_changed
 
     @staticmethod
-    def _to_signed(value):
+    def _to_signed(value: int) -> int:
         """Convert unsigned 16-bit to signed."""
         if value > 32767:
             return value - 65536
         return value
 
     @staticmethod
-    def _to_signed_32(high, low):
+    def _to_signed_32(high: int, low: int) -> int:
         """Convert two 16-bit registers to signed 32-bit."""
         value = (high << 16) | low
         if value > 2147483647:
@@ -712,6 +720,6 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         return value
 
     @staticmethod
-    def _to_unsigned_32(high, low):
+    def _to_unsigned_32(high: int, low: int) -> int:
         """Convert two 16-bit registers to unsigned 32-bit."""
         return (high << 16) | low

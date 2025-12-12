@@ -10,6 +10,8 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from .const import (
     CONF_DEVICE_NAME,
     CONF_DEVICE_ROLE,
+    CONF_MAX_CHARGE_POWER,
+    CONF_MAX_DISCHARGE_POWER,
     DEVICE_ROLE_HOST,
     DOMAIN,
     CONF_MIN_POLL_INTERVAL,
@@ -20,6 +22,8 @@ from .const import (
     DEFAULT_MAX_POLL_INTERVAL,
     DEFAULT_CONSECUTIVE_FAILURES,
     DEFAULT_STALENESS_THRESHOLD,
+    DEFAULT_MAX_CHARGE_POWER,
+    DEFAULT_MAX_DISCHARGE_POWER,
 )
 from .coordinator import NeovoltDataUpdateCoordinator
 
@@ -57,6 +61,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         new_data[CONF_STALENESS_THRESHOLD] = DEFAULT_STALENESS_THRESHOLD
         _LOGGER.info("Migrated existing entry with default polling configuration")
 
+    # Migrate existing entries without power configuration
+    if CONF_MAX_CHARGE_POWER not in entry.data:
+        new_data[CONF_MAX_CHARGE_POWER] = DEFAULT_MAX_CHARGE_POWER
+        new_data[CONF_MAX_DISCHARGE_POWER] = DEFAULT_MAX_DISCHARGE_POWER
+        _LOGGER.info("Migrated existing entry with default power configuration")
+
     # Apply migrations if any
     if new_data != entry.data:
         hass.config_entries.async_update_entry(entry, data=new_data)
@@ -74,7 +84,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         name=f"Neovolt {device_name}",
         manufacturer="Bytewatt Technology Co., Ltd",
         model="Neovolt Hybrid Inverter",
-        sw_version=coordinator.data.get("ems_version"),
         configuration_url=f"http://{entry.data['host']}",
     )
 
