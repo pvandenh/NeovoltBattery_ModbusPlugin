@@ -429,7 +429,7 @@ class NeovoltModbusClient:
         """Close the Modbus connection."""
         with self._lock:
             self._is_closing = True  # Signal that we're closing
-            
+
             if self.client:
                 try:
                     self.client.close()
@@ -438,5 +438,41 @@ class NeovoltModbusClient:
                     _LOGGER.debug(f"Error closing connection (ignored): {e}")
                 finally:
                     self.client = None
-            
+
             self._is_closing = False  # Reset flag after cleanup
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if client is currently connected."""
+        return self.client is not None and self.client.connected
+
+    def force_reconnect(self) -> bool:
+        """
+        Force close and reconnect the Modbus connection.
+
+        Used for auto-recovery when the connection appears stuck.
+        Resets error tracking state to give a fresh start.
+
+        Returns:
+            True if reconnection successful, False otherwise
+        """
+        _LOGGER.info(f"Force reconnecting to {self.host}:{self.port}")
+
+        with self._lock:
+            self._is_closing = True  # Signal that we're closing
+
+            # Close existing connection if any
+            if self.client:
+                try:
+                    self.client.close()
+                except Exception as e:
+                    _LOGGER.debug(f"Error closing client during force reconnect: {e}")
+                self.client = None
+
+            # Reset error tracking for fresh start
+            self._last_error = None
+            self._consecutive_errors = 0
+            self._is_closing = False  # Reset flag
+
+        # Attempt reconnection
+        return self.connect()

@@ -28,6 +28,16 @@ from .const import (
     DEFAULT_MAX_DISCHARGE_POWER,
     MIN_POWER,
     MAX_POWER_LIMIT,
+    CONF_MIN_POLL_INTERVAL,
+    CONF_MAX_POLL_INTERVAL,
+    CONF_CONSECUTIVE_FAILURE_THRESHOLD,
+    CONF_STALENESS_THRESHOLD,
+    DEFAULT_MIN_POLL_INTERVAL,
+    DEFAULT_MAX_POLL_INTERVAL,
+    DEFAULT_CONSECUTIVE_FAILURES,
+    DEFAULT_STALENESS_THRESHOLD,
+    MIN_POLL_INTERVAL_LIMIT,
+    MAX_POLL_INTERVAL_LIMIT,
 )
 from .modbus_client import NeovoltModbusClient
 
@@ -57,6 +67,28 @@ STEP_POWER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_MAX_DISCHARGE_POWER, default=DEFAULT_MAX_DISCHARGE_POWER): vol.All(
             vol.Coerce(float),
             vol.Range(min=MIN_POWER, max=MAX_POWER_LIMIT)
+        ),
+    }
+)
+
+# Step 3: Polling configuration (all devices)
+STEP_POLLING_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_MIN_POLL_INTERVAL, default=DEFAULT_MIN_POLL_INTERVAL): vol.All(
+            vol.Coerce(int),
+            vol.Range(min=MIN_POLL_INTERVAL_LIMIT, max=120)
+        ),
+        vol.Required(CONF_MAX_POLL_INTERVAL, default=DEFAULT_MAX_POLL_INTERVAL): vol.All(
+            vol.Coerce(int),
+            vol.Range(min=60, max=MAX_POLL_INTERVAL_LIMIT)
+        ),
+        vol.Required(CONF_CONSECUTIVE_FAILURE_THRESHOLD, default=DEFAULT_CONSECUTIVE_FAILURES): vol.All(
+            vol.Coerce(int),
+            vol.Range(min=3, max=20)
+        ),
+        vol.Required(CONF_STALENESS_THRESHOLD, default=DEFAULT_STALENESS_THRESHOLD): vol.All(
+            vol.Coerce(int),
+            vol.Range(min=5, max=60)
         ),
     }
 )
@@ -140,13 +172,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Store user data for potential next step
                 self._user_data = user_input
 
-                # If host, proceed to power step; if follower, create entry directly
+                # If host, proceed to power step; if follower, skip to polling step
                 if user_input[CONF_DEVICE_ROLE] == DEVICE_ROLE_HOST:
                     return await self.async_step_power()
                 else:
-                    # Follower - create entry without power settings
-                    title = f"Neovolt {device_name}"
-                    return self.async_create_entry(title=title, data=user_input)
+                    # Follower - skip power settings, go to polling
+                    return await self.async_step_polling()
 
             except CannotConnect as err:
                 _LOGGER.warning("Cannot connect to Neovolt inverter: %s", err)
@@ -174,14 +205,33 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._user_data[CONF_MAX_CHARGE_POWER] = user_input[CONF_MAX_CHARGE_POWER]
             self._user_data[CONF_MAX_DISCHARGE_POWER] = user_input[CONF_MAX_DISCHARGE_POWER]
 
+            # Proceed to polling configuration
+            return await self.async_step_polling()
+
+        return self.async_show_form(
+            step_id="power",
+            data_schema=STEP_POWER_DATA_SCHEMA,
+        )
+
+    async def async_step_polling(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle the polling configuration step."""
+        if user_input is not None:
+            # Merge polling settings with user data
+            self._user_data[CONF_MIN_POLL_INTERVAL] = user_input[CONF_MIN_POLL_INTERVAL]
+            self._user_data[CONF_MAX_POLL_INTERVAL] = user_input[CONF_MAX_POLL_INTERVAL]
+            self._user_data[CONF_CONSECUTIVE_FAILURE_THRESHOLD] = user_input[CONF_CONSECUTIVE_FAILURE_THRESHOLD]
+            self._user_data[CONF_STALENESS_THRESHOLD] = user_input[CONF_STALENESS_THRESHOLD]
+
             device_name = self._user_data[CONF_DEVICE_NAME]
             title = f"Neovolt {device_name}"
 
             return self.async_create_entry(title=title, data=self._user_data)
 
         return self.async_show_form(
-            step_id="power",
-            data_schema=STEP_POWER_DATA_SCHEMA,
+            step_id="polling",
+            data_schema=STEP_POLLING_DATA_SCHEMA,
         )
 
     @staticmethod
@@ -199,7 +249,7 @@ class NeovoltOptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
         self.config_entry = config_entry
-        self._new_role: str | None = None
+        self._new_data: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -209,25 +259,18 @@ class NeovoltOptionsFlowHandler(config_entries.OptionsFlow):
 
         if user_input is not None:
             new_role = user_input[CONF_DEVICE_ROLE]
-            self._new_role = new_role
+            self._new_data = {**self.config_entry.data}
+            self._new_data[CONF_DEVICE_ROLE] = new_role
 
             # If changing to host or staying host, show power options
             if new_role == DEVICE_ROLE_HOST:
                 return await self.async_step_power()
             else:
-                # Changing to follower - just update the role
-                new_data = {**self.config_entry.data}
-                new_data[CONF_DEVICE_ROLE] = new_role
+                # Changing to follower - skip power, go to polling
                 # Remove power settings for followers (optional cleanup)
-                new_data.pop(CONF_MAX_CHARGE_POWER, None)
-                new_data.pop(CONF_MAX_DISCHARGE_POWER, None)
-
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    data=new_data,
-                )
-
-                return self.async_create_entry(title="", data={})
+                self._new_data.pop(CONF_MAX_CHARGE_POWER, None)
+                self._new_data.pop(CONF_MAX_DISCHARGE_POWER, None)
+                return await self.async_step_polling()
 
         # Show role selector
         return self.async_show_form(
@@ -247,17 +290,11 @@ class NeovoltOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Manage the options - step 2: power settings (host only)."""
         if user_input is not None:
-            new_data = {**self.config_entry.data}
-            new_data[CONF_DEVICE_ROLE] = self._new_role or DEVICE_ROLE_HOST
-            new_data[CONF_MAX_CHARGE_POWER] = user_input[CONF_MAX_CHARGE_POWER]
-            new_data[CONF_MAX_DISCHARGE_POWER] = user_input[CONF_MAX_DISCHARGE_POWER]
+            self._new_data[CONF_MAX_CHARGE_POWER] = user_input[CONF_MAX_CHARGE_POWER]
+            self._new_data[CONF_MAX_DISCHARGE_POWER] = user_input[CONF_MAX_DISCHARGE_POWER]
 
-            self.hass.config_entries.async_update_entry(
-                self.config_entry,
-                data=new_data,
-            )
-
-            return self.async_create_entry(title="", data={})
+            # Proceed to polling configuration
+            return await self.async_step_polling()
 
         return self.async_show_form(
             step_id="power",
@@ -280,6 +317,67 @@ class NeovoltOptionsFlowHandler(config_entries.OptionsFlow):
                     ): vol.All(
                         vol.Coerce(float),
                         vol.Range(min=MIN_POWER, max=MAX_POWER_LIMIT)
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_polling(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manage the options - step 3: polling settings."""
+        if user_input is not None:
+            self._new_data[CONF_MIN_POLL_INTERVAL] = user_input[CONF_MIN_POLL_INTERVAL]
+            self._new_data[CONF_MAX_POLL_INTERVAL] = user_input[CONF_MAX_POLL_INTERVAL]
+            self._new_data[CONF_CONSECUTIVE_FAILURE_THRESHOLD] = user_input[CONF_CONSECUTIVE_FAILURE_THRESHOLD]
+            self._new_data[CONF_STALENESS_THRESHOLD] = user_input[CONF_STALENESS_THRESHOLD]
+
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data=self._new_data,
+            )
+
+            return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="polling",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_MIN_POLL_INTERVAL,
+                        default=self.config_entry.data.get(
+                            CONF_MIN_POLL_INTERVAL, DEFAULT_MIN_POLL_INTERVAL
+                        ),
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=MIN_POLL_INTERVAL_LIMIT, max=120)
+                    ),
+                    vol.Required(
+                        CONF_MAX_POLL_INTERVAL,
+                        default=self.config_entry.data.get(
+                            CONF_MAX_POLL_INTERVAL, DEFAULT_MAX_POLL_INTERVAL
+                        ),
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=60, max=MAX_POLL_INTERVAL_LIMIT)
+                    ),
+                    vol.Required(
+                        CONF_CONSECUTIVE_FAILURE_THRESHOLD,
+                        default=self.config_entry.data.get(
+                            CONF_CONSECUTIVE_FAILURE_THRESHOLD, DEFAULT_CONSECUTIVE_FAILURES
+                        ),
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=3, max=20)
+                    ),
+                    vol.Required(
+                        CONF_STALENESS_THRESHOLD,
+                        default=self.config_entry.data.get(
+                            CONF_STALENESS_THRESHOLD, DEFAULT_STALENESS_THRESHOLD
+                        ),
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=5, max=60)
                     ),
                 }
             ),

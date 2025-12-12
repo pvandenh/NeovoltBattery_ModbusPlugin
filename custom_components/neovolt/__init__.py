@@ -7,7 +7,20 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_DEVICE_NAME, CONF_DEVICE_ROLE, DEVICE_ROLE_HOST, DOMAIN
+from .const import (
+    CONF_DEVICE_NAME,
+    CONF_DEVICE_ROLE,
+    DEVICE_ROLE_HOST,
+    DOMAIN,
+    CONF_MIN_POLL_INTERVAL,
+    CONF_MAX_POLL_INTERVAL,
+    CONF_CONSECUTIVE_FAILURE_THRESHOLD,
+    CONF_STALENESS_THRESHOLD,
+    DEFAULT_MIN_POLL_INTERVAL,
+    DEFAULT_MAX_POLL_INTERVAL,
+    DEFAULT_CONSECUTIVE_FAILURES,
+    DEFAULT_STALENESS_THRESHOLD,
+)
 from .coordinator import NeovoltDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,6 +48,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if CONF_DEVICE_ROLE not in entry.data:
         new_data[CONF_DEVICE_ROLE] = DEVICE_ROLE_HOST
         _LOGGER.info("Migrated existing entry to device_role='host'")
+
+    # Migrate existing entries without polling configuration
+    if CONF_MIN_POLL_INTERVAL not in entry.data:
+        new_data[CONF_MIN_POLL_INTERVAL] = DEFAULT_MIN_POLL_INTERVAL
+        new_data[CONF_MAX_POLL_INTERVAL] = DEFAULT_MAX_POLL_INTERVAL
+        new_data[CONF_CONSECUTIVE_FAILURE_THRESHOLD] = DEFAULT_CONSECUTIVE_FAILURES
+        new_data[CONF_STALENESS_THRESHOLD] = DEFAULT_STALENESS_THRESHOLD
+        _LOGGER.info("Migrated existing entry with default polling configuration")
 
     # Apply migrations if any
     if new_data != entry.data:

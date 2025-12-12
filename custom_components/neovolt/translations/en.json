@@ -30,6 +30,22 @@
           "max_charge_power": "Maximum charging power in kW. For parallel systems, enter total capacity (e.g., 15 for three 5kW units)",
           "max_discharge_power": "Maximum discharging power in kW. For parallel systems, enter total capacity"
         }
+      },
+      "polling": {
+        "title": "Polling & Recovery",
+        "description": "Configure adaptive polling intervals and auto-recovery settings.\n\nPolling automatically speeds up for changing values and slows down for stable values.",
+        "data": {
+          "min_poll_interval": "Minimum Poll Interval (seconds)",
+          "max_poll_interval": "Maximum Poll Interval (seconds)",
+          "consecutive_failure_threshold": "Recovery: Consecutive Failures",
+          "staleness_threshold": "Recovery: Data Staleness (minutes)"
+        },
+        "data_description": {
+          "min_poll_interval": "Fastest polling rate for active values (hard minimum: 10s)",
+          "max_poll_interval": "Slowest polling rate for stable values",
+          "consecutive_failure_threshold": "Trigger auto-recovery after this many consecutive poll failures",
+          "staleness_threshold": "Trigger auto-recovery if data hasn't changed for this many minutes"
+        }
       }
     },
     "error": {
@@ -62,6 +78,22 @@
         "data_description": {
           "max_charge_power": "Maximum charging power in kW. For parallel systems, enter total capacity",
           "max_discharge_power": "Maximum discharging power in kW. For parallel systems, enter total capacity"
+        }
+      },
+      "polling": {
+        "title": "Polling & Recovery",
+        "description": "Update adaptive polling intervals and auto-recovery settings.\n\nChanges will take effect after reloading the integration.",
+        "data": {
+          "min_poll_interval": "Minimum Poll Interval (seconds)",
+          "max_poll_interval": "Maximum Poll Interval (seconds)",
+          "consecutive_failure_threshold": "Recovery: Consecutive Failures",
+          "staleness_threshold": "Recovery: Data Staleness (minutes)"
+        },
+        "data_description": {
+          "min_poll_interval": "Fastest polling rate for active values (hard minimum: 10s)",
+          "max_poll_interval": "Slowest polling rate for stable values",
+          "consecutive_failure_threshold": "Trigger auto-recovery after this many consecutive poll failures",
+          "staleness_threshold": "Trigger auto-recovery if data hasn't changed for this many minutes"
         }
       }
     }
