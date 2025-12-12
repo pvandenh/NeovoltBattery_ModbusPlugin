@@ -314,7 +314,7 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
                 f"number.neovolt_{self._device_name}_prevent_solar_charging_duration",
                 480.0
             ))
-            duration_seconds = duration * 60
+            duration_seconds = min(duration * 60, 65535)  # Cap to 16-bit max (~18 hours)
 
             # Get current SOC to use as cutoff (prevent discharge below current level)
             current_soc = self.coordinator.data.get("battery_soc", 20)

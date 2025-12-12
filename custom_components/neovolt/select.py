@@ -62,8 +62,12 @@ class NeovoltTimePeriodControlSelect(CoordinatorEntity, SelectEntity):
     def current_option(self):
         """Return the current option."""
         value = self.coordinator.data.get("time_period_control_flag", 0)
-        if value < len(self._attr_options):
+        # Bounds check: ensure value is valid index into options
+        if isinstance(value, int) and 0 <= value < len(self._attr_options):
             return self._attr_options[value]
+        # Invalid value - log warning and return default
+        if value != 0:
+            _LOGGER.warning(f"Unexpected time_period_control_flag value: {value}, using default")
         return self._attr_options[0]
 
     async def async_select_option(self, option: str) -> None:
