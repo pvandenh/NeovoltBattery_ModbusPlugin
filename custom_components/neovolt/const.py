@@ -8,6 +8,11 @@ DEFAULT_SLAVE_ID = 85
 
 CONF_SLAVE_ID = "slave_id"
 CONF_DEVICE_NAME = "device_name"
+CONF_DEVICE_ROLE = "device_role"
+
+# Device roles
+DEVICE_ROLE_HOST = "host"
+DEVICE_ROLE_FOLLOWER = "follower"
 
 # Max power configuration
 CONF_MAX_CHARGE_POWER = "max_charge_power"

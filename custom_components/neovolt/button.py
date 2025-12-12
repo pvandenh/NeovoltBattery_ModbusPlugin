@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DISPATCH_RESET_VALUES, DOMAIN
+from .const import DEVICE_ROLE_FOLLOWER, DISPATCH_RESET_VALUES, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +20,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Neovolt buttons."""
+    device_role = hass.data[DOMAIN][entry.entry_id]["device_role"]
+
+    # Skip control entities for follower devices
+    if device_role == DEVICE_ROLE_FOLLOWER:
+        return
+
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     client = hass.data[DOMAIN][entry.entry_id]["client"]

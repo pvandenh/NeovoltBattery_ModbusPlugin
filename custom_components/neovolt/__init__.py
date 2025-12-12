@@ -7,7 +7,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_DEVICE_NAME, DOMAIN
+from .const import CONF_DEVICE_NAME, CONF_DEVICE_ROLE, DEVICE_ROLE_HOST, DOMAIN
 from .coordinator import NeovoltDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,12 +26,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug(f"Setting up Neovolt integration with config: {entry.data}")
 
     # Migrate existing entries without device_name (keep "inverter" for backward compatibility)
+    new_data = {**entry.data}
     if CONF_DEVICE_NAME not in entry.data:
-        new_data = {**entry.data, CONF_DEVICE_NAME: "inverter"}
+        new_data[CONF_DEVICE_NAME] = "inverter"
+        _LOGGER.info("Migrated existing entry to device_name='inverter'")
+
+    # Migrate existing entries without device_role (default to host)
+    if CONF_DEVICE_ROLE not in entry.data:
+        new_data[CONF_DEVICE_ROLE] = DEVICE_ROLE_HOST
+        _LOGGER.info("Migrated existing entry to device_role='host'")
+
+    # Apply migrations if any
+    if new_data != entry.data:
         hass.config_entries.async_update_entry(entry, data=new_data)
-        _LOGGER.info(f"Migrated existing entry to device_name='inverter'")
 
     device_name = entry.data.get(CONF_DEVICE_NAME, "inverter")
+    device_role = entry.data.get(CONF_DEVICE_ROLE, DEVICE_ROLE_HOST)
 
     coordinator = NeovoltDataUpdateCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
@@ -49,12 +59,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Initialize domain data if not exists
     hass.data.setdefault(DOMAIN, {})
 
-    # Store coordinator, device info, client, and device_name
+    # Store coordinator, device info, client, device_name, and device_role
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
         "device_info": device_info,
         "client": coordinator.client,
         "device_name": device_name,
+        "device_role": device_role,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

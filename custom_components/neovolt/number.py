@@ -16,6 +16,7 @@ from .const import (
     CONF_MAX_DISCHARGE_POWER,
     DEFAULT_MAX_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
+    DEVICE_ROLE_FOLLOWER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,6 +28,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Neovolt numbers."""
+    device_role = hass.data[DOMAIN][entry.entry_id]["device_role"]
+
+    # Skip control entities for follower devices
+    if device_role == DEVICE_ROLE_FOLLOWER:
+        return
+
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     client = hass.data[DOMAIN][entry.entry_id]["client"]
