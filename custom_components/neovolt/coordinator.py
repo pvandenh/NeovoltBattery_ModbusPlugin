@@ -340,11 +340,18 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
             # Update success tracking for stale data detection
             self._last_successful_data_time = now
-            self._last_known_data = data.copy()
+            # Merge new data with cache to preserve keys from successful prior reads
+            # This prevents partial data (from failed blocks) from wiping cached values
+            self._last_known_data.update(data)
 
-            return data
+            # Return merged cache to ensure all previously seen keys are available
+            # even if some blocks failed to read this cycle
+            return dict(self._last_known_data)
 
-        except (UpdateFailed, ModbusException, ConnectionError, TimeoutError, OSError) as err:
+        except Exception as err:
+            # Catch ALL exceptions to ensure cache-return logic always runs
+            # This prevents uncaught exceptions (ValueError, AttributeError, etc.)
+            # from bypassing our cached data fallback
             self.recovery_manager.record_failure()
             _LOGGER.warning(f"Failed to fetch data: {err}")
 
@@ -765,3 +772,12 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         """Return True if data is older than 12 hours or never updated."""
         age = self.data_age_seconds
         return age is None or age > DATA_STALE_THRESHOLD.total_seconds()
+
+    @property
+    def has_valid_data(self) -> bool:
+        """Return True if we have cached data that's not stale (< 12 hours).
+
+        Used by entities to determine availability independently of last_update_success.
+        This prevents brief "unavailable" flashes during connection hiccups.
+        """
+        return bool(self._last_known_data) and not self.is_data_stale

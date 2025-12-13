@@ -244,6 +244,16 @@ class NeovoltSensor(CoordinatorEntity, SensorEntity):
         self._attr_device_info = device_info
 
     @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data.
+
+        Override CoordinatorEntity.available to prevent brief unavailability
+        during connection hiccups. Entity stays available as long as we have
+        cached data that's less than 12 hours old.
+        """
+        return self.coordinator.has_valid_data
+
+    @property
     def native_value(self):
         """Return the state of the sensor."""
         return self.coordinator.data.get(self._key)
@@ -275,6 +285,11 @@ class NeovoltCalculatedSensor(CoordinatorEntity, SensorEntity):
         self._attr_state_class = state_class
         self._attr_icon = icon
         self._attr_device_info = device_info
+
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
 
     @property
     def native_value(self):
@@ -309,6 +324,11 @@ class NeovoltDailyResetSensor(CoordinatorEntity, SensorEntity):
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         self._attr_icon = icon
         self._attr_device_info = device_info
+
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
 
     @property
     def native_value(self):

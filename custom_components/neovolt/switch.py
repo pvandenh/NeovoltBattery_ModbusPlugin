@@ -132,6 +132,11 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_device_info = device_info
 
     @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
+
+    @property
     def is_on(self):
         """Return if switch is on."""
         data = self.coordinator.data
@@ -213,6 +218,11 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_device_info = device_info
 
     @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
+
+    @property
     def is_on(self):
         """Return if switch is on."""
         data = self.coordinator.data
@@ -291,6 +301,11 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_unique_id = f"neovolt_{device_name}_prevent_solar_charging"
         self._attr_icon = "mdi:battery-lock"
         self._attr_device_info = device_info
+
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
 
     @property
     def is_on(self):

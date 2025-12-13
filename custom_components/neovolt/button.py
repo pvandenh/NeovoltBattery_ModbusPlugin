@@ -51,6 +51,11 @@ class NeovoltStopForceChargeDischargeButton(CoordinatorEntity, ButtonEntity):
         self._attr_icon = "mdi:stop-circle"
         self._attr_device_info = device_info
 
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
+
     async def async_press(self) -> None:
         """Handle the button press."""
         try:

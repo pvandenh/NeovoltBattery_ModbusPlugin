@@ -174,6 +174,11 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
             self._local_value = default_value if default_value is not None else min_val
 
     @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
+
+    @property
     def native_max_value(self) -> float:
         """Return the maximum value (dynamically from config if applicable)."""
         # Update max value from config entry for power settings

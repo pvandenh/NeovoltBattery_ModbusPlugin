@@ -59,6 +59,11 @@ class NeovoltTimePeriodControlSelect(CoordinatorEntity, SelectEntity):
         self._attr_device_info = device_info
 
     @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
+
+    @property
     def current_option(self):
         """Return the current option."""
         value = self.coordinator.data.get("time_period_control_flag", 0)
