@@ -248,6 +248,17 @@ class NeovoltSensor(CoordinatorEntity, SensorEntity):
         """Return the state of the sensor."""
         return self.coordinator.data.get(self._key)
 
+    @property
+    def extra_state_attributes(self):
+        """Return additional state attributes including data freshness."""
+        attrs = {}
+        if hasattr(self.coordinator, 'data_age_seconds'):
+            age = self.coordinator.data_age_seconds
+            if age is not None:
+                attrs["data_age_seconds"] = round(age)
+                attrs["data_stale"] = age > 43200  # 12 hours
+        return attrs
+
 
 class NeovoltCalculatedSensor(CoordinatorEntity, SensorEntity):
     """Representation of a calculated Neovolt sensor."""
@@ -272,6 +283,17 @@ class NeovoltCalculatedSensor(CoordinatorEntity, SensorEntity):
         # Just return the value from coordinator data
         return self.coordinator.data.get(self._key)
 
+    @property
+    def extra_state_attributes(self):
+        """Return additional state attributes including data freshness."""
+        attrs = {}
+        if hasattr(self.coordinator, 'data_age_seconds'):
+            age = self.coordinator.data_age_seconds
+            if age is not None:
+                attrs["data_age_seconds"] = round(age)
+                attrs["data_stale"] = age > 43200  # 12 hours
+        return attrs
+
 
 class NeovoltDailyResetSensor(CoordinatorEntity, SensorEntity):
     """Representation of a daily reset sensor that tracks energy from midnight."""
@@ -292,3 +314,14 @@ class NeovoltDailyResetSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         """Return the daily reset value from coordinator."""
         return self.coordinator.data.get(self._key)
+
+    @property
+    def extra_state_attributes(self):
+        """Return additional state attributes including data freshness."""
+        attrs = {}
+        if hasattr(self.coordinator, 'data_age_seconds'):
+            age = self.coordinator.data_age_seconds
+            if age is not None:
+                attrs["data_age_seconds"] = round(age)
+                attrs["data_stale"] = age > 43200  # 12 hours
+        return attrs

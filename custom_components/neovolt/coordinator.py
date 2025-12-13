@@ -39,6 +39,9 @@ UPDATE_INTERVAL = timedelta(seconds=10)
 # Minimum time between persistent data saves (prevents excessive writes)
 SAVE_DEBOUNCE_INTERVAL = timedelta(minutes=5)
 
+# Maximum age of cached data before marking entities unavailable (12 hours)
+DATA_STALE_THRESHOLD = timedelta(hours=12)
+
 # Keys for storing persistent data in config entry
 STORAGE_LAST_RESET_DATE = "last_reset_date"
 STORAGE_MIDNIGHT_BASELINE = "pv_inverter_energy_at_midnight"
@@ -226,6 +229,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         # Debouncing for persistent data saves
         self._last_save_time = None
 
+        # Track last successful data fetch for stale data detection
+        self._last_successful_data_time: Optional[datetime] = None
+        self._last_known_data: Dict[str, Any] = {}
+
         # Load persistent values from config entry options
         # This ensures they survive Home Assistant restarts
         options = entry.options or {}
@@ -331,10 +338,32 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             # Record success for recovery manager
             self.recovery_manager.record_success(any_data_changed, now)
 
+            # Update success tracking for stale data detection
+            self._last_successful_data_time = now
+            self._last_known_data = data.copy()
+
             return data
 
         except (UpdateFailed, ModbusException, ConnectionError, TimeoutError, OSError) as err:
             self.recovery_manager.record_failure()
+            _LOGGER.warning(f"Failed to fetch data: {err}")
+
+            # Return cached data if available and not too old (< 12 hours)
+            if self._last_known_data and self._last_successful_data_time:
+                age = now - self._last_successful_data_time
+                if age < DATA_STALE_THRESHOLD:
+                    _LOGGER.debug(
+                        f"Using cached data ({age.total_seconds():.0f}s old, "
+                        f"{age.total_seconds()/3600:.1f}h)"
+                    )
+                    return self._last_known_data
+                else:
+                    _LOGGER.warning(
+                        f"Cached data too old ({age.total_seconds()/3600:.1f}h), "
+                        f"marking entities unavailable"
+                    )
+
+            # Only raise UpdateFailed if no cached data or data is too old
             raise UpdateFailed(f"Error communicating with inverter: {err}") from err
 
     async def _perform_recovery(self) -> None:
@@ -723,3 +752,16 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
     def _to_unsigned_32(high: int, low: int) -> int:
         """Convert two 16-bit registers to unsigned 32-bit."""
         return (high << 16) | low
+
+    @property
+    def data_age_seconds(self) -> Optional[float]:
+        """Return age of data in seconds, or None if never successfully updated."""
+        if self._last_successful_data_time is None:
+            return None
+        return (dt_util.now() - self._last_successful_data_time).total_seconds()
+
+    @property
+    def is_data_stale(self) -> bool:
+        """Return True if data is older than 12 hours or never updated."""
+        age = self.data_age_seconds
+        return age is None or age > DATA_STALE_THRESHOLD.total_seconds()
