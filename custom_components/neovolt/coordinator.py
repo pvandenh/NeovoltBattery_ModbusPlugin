@@ -338,11 +338,12 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             # Record success for recovery manager
             self.recovery_manager.record_success(any_data_changed, now)
 
-            # Update success tracking for stale data detection
-            self._last_successful_data_time = now
-            # Merge new data with cache to preserve keys from successful prior reads
-            # This prevents partial data (from failed blocks) from wiping cached values
+            # Merge new data with cache FIRST (before timestamp)
+            # This prevents race where timestamp is set but data isn't yet merged
+            # Also preserves keys from successful prior reads
             self._last_known_data.update(data)
+            # Now update timestamp for stale data detection
+            self._last_successful_data_time = now
 
             # Return merged cache to ensure all previously seen keys are available
             # even if some blocks failed to read this cycle
@@ -769,15 +770,24 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
     @property
     def is_data_stale(self) -> bool:
-        """Return True if data is older than 12 hours or never updated."""
+        """Return True if data is older than 12 hours."""
         age = self.data_age_seconds
-        return age is None or age > DATA_STALE_THRESHOLD.total_seconds()
+        if age is None:
+            return False  # No timestamp yet = not stale (startup state)
+        return age > DATA_STALE_THRESHOLD.total_seconds()
 
     @property
     def has_valid_data(self) -> bool:
-        """Return True if we have cached data that's not stale (< 12 hours).
+        """Return True if we have any cached data that's not stale.
 
         Used by entities to determine availability independently of last_update_success.
         This prevents brief "unavailable" flashes during connection hiccups.
         """
-        return bool(self._last_known_data) and not self.is_data_stale
+        # Must have cached data
+        if not self._last_known_data:
+            return False
+        # If no timestamp yet (startup), data is valid as long as cache exists
+        if self._last_successful_data_time is None:
+            return True
+        # Have data and timestamp - check 12-hour staleness
+        return not self.is_data_stale
