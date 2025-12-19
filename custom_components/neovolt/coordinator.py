@@ -338,11 +338,12 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             # Record success for recovery manager
             self.recovery_manager.record_success(any_data_changed, now)
 
-            # Merge new data with cache FIRST (before timestamp)
-            # This prevents race where timestamp is set but data isn't yet merged
-            # Also preserves keys from successful prior reads
+            # CRITICAL FIX: Merge new data with cache FIRST (before timestamp update)
+            # This prevents race condition where timestamp is set but data isn't yet merged
+            # Also preserves keys from successful prior reads even if some blocks failed
             self._last_known_data.update(data)
-            # Now update timestamp for stale data detection
+            
+            # Now update timestamp for stale data detection (AFTER data merge)
             self._last_successful_data_time = now
 
             # Return merged cache to ensure all previously seen keys are available
@@ -399,7 +400,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         Returns:
             Tuple of (data dict, whether any data changed)
         """
-        data = {}
+        # CRITICAL FIX: Start with existing cached data instead of empty dict
+        # This prevents gaps when individual blocks fail - their keys remain in cache
+        data = dict(self._last_known_data)
+        
         any_data_changed = False
         successful_reads = {"grid": False, "pv": False, "battery": False}
         critical_blocks = {"grid", "pv", "battery"}
@@ -417,17 +421,16 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                     )
                     if changed:
                         any_data_changed = True
+                    # Overlay new data on existing cache
                     data.update(block_data)
 
                     # Track successful reads for critical blocks
                     if block_name in successful_reads:
                         successful_reads[block_name] = True
                 else:
-                    # Read failed - track failure and use cached values
+                    # Read failed - keep existing cached values (don't update with empty dict)
                     failure_count = self.polling_manager.record_block_failure(block_name)
-                    cached = self.polling_manager.get_cached_values(block_name)
-                    data.update(cached)
-
+                    
                     if block_name in critical_blocks:
                         _LOGGER.warning(
                             f"Block {block_name} read failed ({failure_count} consecutive), "
@@ -435,12 +438,12 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                         )
                     else:
                         _LOGGER.debug(f"Block {block_name} read failed, using cached values")
+                    
+                    # No data.update() needed - we started with existing cache
             else:
-                # Use cached values for this block
+                # Block not polled this cycle - use cached values (already in data)
+                # Check if we have cached values for dependency tracking
                 cached = self.polling_manager.get_cached_values(block_name)
-                data.update(cached)
-
-                # Cached reads count as successful for dependency tracking
                 if block_name in successful_reads and cached:
                     successful_reads[block_name] = True
 
@@ -660,7 +663,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             # Flag if this is an estimated value (missing one source)
             data["house_load_estimated"] = available_sources < 3
         else:
-            # Not enough data for reliable calculation
+            # Not enough data for reliable calculation - FIXED INDENTATION
             data["total_house_load"] = None
             data["house_load_estimated"] = None
             data["excess_grid_export"] = 0
