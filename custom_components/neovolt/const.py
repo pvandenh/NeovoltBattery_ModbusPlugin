@@ -70,6 +70,13 @@ RECOVERY_COOLDOWN_SECONDS = 60    # cooldown between recovery attempts
 MIN_POLL_INTERVAL_LIMIT = 10      # Cannot go below 10 seconds
 MAX_POLL_INTERVAL_LIMIT = 3600    # Cannot exceed 1 hour
 
+# Keys for storing persistent data in config entry options
+# These are runtime data that should NOT trigger integration reload
+STORAGE_LAST_RESET_DATE = "last_reset_date"
+STORAGE_MIDNIGHT_BASELINE = "pv_inverter_energy_at_midnight"
+STORAGE_LAST_KNOWN_TOTAL = "last_known_total_energy"
+STORAGE_DAILY_PRESERVED = "daily_energy_before_unavailable"
+
 
 @dataclass
 class RegisterBlock:

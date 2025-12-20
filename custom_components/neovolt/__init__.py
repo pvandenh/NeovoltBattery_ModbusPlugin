@@ -24,6 +24,10 @@ from .const import (
     DEFAULT_STALENESS_THRESHOLD,
     DEFAULT_MAX_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
+    STORAGE_LAST_RESET_DATE,
+    STORAGE_MIDNIGHT_BASELINE,
+    STORAGE_LAST_KNOWN_TOTAL,
+    STORAGE_DAILY_PRESERVED,
 )
 from .coordinator import NeovoltDataUpdateCoordinator
 
@@ -122,5 +126,31 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update."""
+    """Handle options update - only reload for configuration changes, not runtime data."""
+    # Runtime data keys that should NOT trigger a reload
+    # These are updated by the coordinator during normal operation
+    RUNTIME_KEYS = {
+        STORAGE_LAST_RESET_DATE,
+        STORAGE_MIDNIGHT_BASELINE,
+        STORAGE_LAST_KNOWN_TOTAL,
+        STORAGE_DAILY_PRESERVED,
+    }
+    
+    # Get current options
+    options = entry.options or {}
+    
+    # If we have options, check if only runtime keys were updated
+    if options:
+        # Get all keys that are NOT runtime keys (i.e., actual config keys)
+        config_keys = set(options.keys()) - RUNTIME_KEYS
+        
+        # If no config keys exist (only runtime keys), skip reload
+        if not config_keys:
+            _LOGGER.debug(
+                "Persistent data updated (runtime keys only), skipping integration reload"
+            )
+            return
+    
+    # Configuration keys were changed - reload integration
+    _LOGGER.info("Configuration changed, reloading Neovolt integration")
     await hass.config_entries.async_reload(entry.entry_id)
