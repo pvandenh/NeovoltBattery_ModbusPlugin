@@ -63,6 +63,9 @@ class NeovoltStopForceChargeDischargeButton(CoordinatorEntity, ButtonEntity):
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
+            # Optimistic update - show stopped state immediately
+            self.coordinator.set_optimistic_value("dispatch_start", 0)
+            self.coordinator.set_optimistic_value("dispatch_power", 0)
             await self.coordinator.async_request_refresh()
         except Exception as e:
             _LOGGER.error(f"Failed to stop force charge/discharge: {e}")

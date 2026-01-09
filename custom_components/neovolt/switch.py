@@ -187,6 +187,9 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, values
             )
+            # Optimistic update - show ON state immediately
+            self.coordinator.set_optimistic_value("dispatch_start", 1)
+            self.coordinator.set_optimistic_value("dispatch_power", -power_watts)
             await self.coordinator.async_request_refresh()
         except Exception as e:
             _LOGGER.error(f"Failed to enable force charging: {e}")
@@ -198,6 +201,9 @@ class NeovoltForceChargeSwitch(CoordinatorEntity, SwitchEntity):
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
+            # Optimistic update - show OFF state immediately
+            self.coordinator.set_optimistic_value("dispatch_start", 0)
+            self.coordinator.set_optimistic_value("dispatch_power", 0)
             await self.coordinator.async_request_refresh()
         except Exception as e:
             _LOGGER.error(f"Failed to disable force charging: {e}")
@@ -272,6 +278,9 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, values
             )
+            # Optimistic update - show ON state immediately
+            self.coordinator.set_optimistic_value("dispatch_start", 1)
+            self.coordinator.set_optimistic_value("dispatch_power", power_watts)
             await self.coordinator.async_request_refresh()
         except Exception as e:
             _LOGGER.error(f"Failed to enable force discharging: {e}")
@@ -283,6 +292,9 @@ class NeovoltForceDischargeSwitch(CoordinatorEntity, SwitchEntity):
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
+            # Optimistic update - show OFF state immediately
+            self.coordinator.set_optimistic_value("dispatch_start", 0)
+            self.coordinator.set_optimistic_value("dispatch_power", 0)
             await self.coordinator.async_request_refresh()
         except Exception as e:
             _LOGGER.error(f"Failed to disable force discharging: {e}")
@@ -359,6 +371,9 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, values
             )
+            # Optimistic update - show ON state immediately
+            self.coordinator.set_optimistic_value("dispatch_start", 1)
+            self.coordinator.set_optimistic_value("dispatch_power", 50)
             await self.coordinator.async_request_refresh()
         except Exception as e:
             _LOGGER.error(f"Failed to enable prevent solar charging: {e}")
@@ -370,6 +385,9 @@ class NeovoltPreventSolarChargingSwitch(CoordinatorEntity, SwitchEntity):
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
+            # Optimistic update - show OFF state immediately
+            self.coordinator.set_optimistic_value("dispatch_start", 0)
+            self.coordinator.set_optimistic_value("dispatch_power", 0)
             await self.coordinator.async_request_refresh()
         except Exception as e:
             _LOGGER.error(f"Failed to disable prevent solar charging: {e}")

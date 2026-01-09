@@ -224,6 +224,8 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
                     await self._hass.async_add_executor_job(
                         self._client.write_register, self._address, int(value)
                     )
+                # Optimistic update - show expected value immediately
+                self.coordinator.set_optimistic_value(self._key, value)
                 await self.coordinator.async_request_refresh()
             else:
                 # Store locally for force charge/discharge settings

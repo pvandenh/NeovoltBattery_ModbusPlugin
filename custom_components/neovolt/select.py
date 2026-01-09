@@ -91,6 +91,8 @@ class NeovoltTimePeriodControlSelect(CoordinatorEntity, SelectEntity):
             await self._hass.async_add_executor_job(
                 self._client.write_register, 0x084F, value
             )
+            # Optimistic update - show expected value immediately
+            self.coordinator.set_optimistic_value("time_period_control_flag", value)
             await self.coordinator.async_request_refresh()
         except ValueError as e:
             # This should not happen due to validation above, but handle defensively

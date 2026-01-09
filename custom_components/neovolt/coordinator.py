@@ -794,3 +794,12 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             return True
         # Have data and timestamp - check 12-hour staleness
         return not self.is_data_stale
+
+    def set_optimistic_value(self, key: str, value: Any) -> None:
+        """Set a value optimistically after write command.
+
+        Updates cache immediately so UI shows expected state before
+        next poll confirms actual inverter state. If write failed,
+        next poll will correct the cached value automatically.
+        """
+        self._last_known_data[key] = value
