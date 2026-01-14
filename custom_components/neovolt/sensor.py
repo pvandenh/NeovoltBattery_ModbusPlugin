@@ -206,6 +206,7 @@ async def async_setup_entry(
         NeovoltSensor(coordinator, device_info, device_name, "dispatch_power", "Dispatch Power",
                      UnitOfPower.WATT, SensorDeviceClass.POWER,
                      SensorStateClass.MEASUREMENT, "mdi:flash"),
+        NeovoltDispatchStatusSensor(coordinator, device_info, device_name),
 
         # Calculated/Template Sensors
         NeovoltCalculatedSensor(coordinator, device_info, device_name, "total_house_load", "Total House Load",
@@ -345,3 +346,86 @@ class NeovoltDailyResetSensor(CoordinatorEntity, SensorEntity):
                 attrs["data_age_seconds"] = round(age)
                 attrs["data_stale"] = age > 43200  # 12 hours
         return attrs
+
+
+class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing current dispatch operation status."""
+
+    def __init__(self, coordinator, device_info, device_name):
+        """Initialize the dispatch status sensor."""
+        super().__init__(coordinator)
+        self._attr_name = f"Neovolt {device_name} Dispatch Status"
+        self._attr_unique_id = f"neovolt_{device_name}_dispatch_status"
+        self._attr_icon = "mdi:information-outline"
+        self._attr_device_info = device_info
+
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return self.coordinator.has_valid_data
+
+    @property
+    def native_value(self) -> str:
+        """Return human-readable dispatch status."""
+        data = self.coordinator.data
+        dispatch_start = data.get("dispatch_start", 0)
+
+        if dispatch_start != 1:
+            return "Normal (Auto)"
+
+        dispatch_power = data.get("dispatch_power", 0)
+        dispatch_mode = data.get("dispatch_mode", 0)
+        dispatch_time = data.get("dispatch_time_remaining", 0)
+
+        # Determine mode and power display
+        mode = None
+        power_kw = None
+
+        if dispatch_mode == 1:
+            mode = "Battery PV Only"
+        elif dispatch_mode == 3:
+            mode = "Load Following"
+            power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
+        elif dispatch_mode == 19:
+            mode = "No Battery Charge"
+        elif dispatch_mode == 2:
+            if dispatch_power > 0:
+                mode = "Force Charging"
+                power_kw = dispatch_power / 1000
+            elif dispatch_power == -50:
+                mode = "Preventing Solar Charge"
+            elif dispatch_power < 0:
+                mode = "Force Discharging"
+                power_kw = abs(dispatch_power) / 1000
+            else:
+                mode = "Dispatch Active"
+        else:
+            mode = f"Mode {dispatch_mode}"
+
+        # Build status string
+        status = mode
+        if power_kw:
+            status = f"{mode} @ {power_kw:.1f}kW"
+
+        # Add time remaining
+        if dispatch_time > 0:
+            hours = dispatch_time // 3600
+            minutes = (dispatch_time % 3600) // 60
+            if hours > 0:
+                status = f"{status} ({hours}h {minutes}m)"
+            elif minutes > 0:
+                status = f"{status} ({minutes}m)"
+
+        return status
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return detailed dispatch state as attributes."""
+        data = self.coordinator.data
+        return {
+            "dispatch_active": data.get("dispatch_start", 0) == 1,
+            "dispatch_power_w": data.get("dispatch_power", 0),
+            "dispatch_mode": data.get("dispatch_mode", 0),
+            "dispatch_soc_value": data.get("dispatch_soc", 0),
+            "dispatch_time_remaining_s": data.get("dispatch_time_remaining", 0),
+        }

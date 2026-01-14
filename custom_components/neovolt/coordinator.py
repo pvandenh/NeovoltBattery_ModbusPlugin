@@ -591,11 +591,17 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         }
 
     def _parse_dispatch_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse dispatch register block (0x0880-0x0888)."""
+        """Parse dispatch register block (0x0880-0x088A, 11 registers)."""
         power_raw = self._to_unsigned_32(regs[1], regs[2])
+        time_raw = self._to_unsigned_32(regs[7], regs[8])
         return {
             "dispatch_start": regs[0],
-            "dispatch_power": power_raw - 32000,
+            "dispatch_power": power_raw - 32000,  # Negative = charge, Positive = discharge
+            "dispatch_mode": regs[5],              # Mode number (0, 1, 2, 3, 19, etc.)
+            "dispatch_soc": regs[6],               # SOC target/cutoff value
+            "dispatch_time_remaining": time_raw,   # Remaining time in seconds
+            "dispatch_energy_routing": regs[9],    # Para7: Energy routing (0-5, 255=default)
+            "dispatch_pv_switch": regs[10],        # Para8: PV switch (0=auto, 1=open, 2=close)
         }
 
     def _calculate_derived_values(

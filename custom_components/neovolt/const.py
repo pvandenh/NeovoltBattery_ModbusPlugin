@@ -47,10 +47,10 @@ DISPATCH_MODE_POWER_WITH_SOC = 2  # Control by power with SOC limit
 # Used when resetting dispatch - maintains previous command for 90 seconds
 DISPATCH_DURATION_DEFAULT = 90
 
-# Dispatch reset command
-# Format: [mode, reserved, charge_power, reserved, discharge_power, soc_mode, soc_value, reserved, duration]
+# Dispatch reset command (11 registers: Para1-Para8)
+# Format: [Para1, Para2_hi, Para2_lo, Para3_hi, Para3_lo, Para4, Para5, Para6_hi, Para6_lo, Para7, Para8]
 # This command resets to idle state with 90s timeout
-DISPATCH_RESET_VALUES = [0, 0, MODBUS_OFFSET, 0, MODBUS_OFFSET, 0, 0, 0, DISPATCH_DURATION_DEFAULT]
+DISPATCH_RESET_VALUES = [0, 0, MODBUS_OFFSET, 0, MODBUS_OFFSET, 0, 0, 0, DISPATCH_DURATION_DEFAULT, 255, 0]
 
 # Polling configuration
 CONF_MIN_POLL_INTERVAL = "min_poll_interval"
@@ -95,5 +95,5 @@ REGISTER_BLOCKS = {
     "inverter": RegisterBlock("inverter", 0x0500, 110),
     "pv_inverter_energy": RegisterBlock("pv_inverter_energy", 0x08D0, 2),
     "settings": RegisterBlock("settings", 0x0800, 86),
-    "dispatch": RegisterBlock("dispatch", 0x0880, 9),
+    "dispatch": RegisterBlock("dispatch", 0x0880, 11),  # Para1-Para8 (11 registers)
 }
