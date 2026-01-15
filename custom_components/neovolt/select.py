@@ -286,7 +286,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         ))
         soc_target = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_soc_limit",
+            f"number.neovolt_{self._device_name}_dispatch_charge_soc",
             100.0
         ))
 
@@ -333,8 +333,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         ))
         soc_cutoff = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_soc_limit",
-            20.0
+            f"number.neovolt_{self._device_name}_dispatch_discharge_soc",
+            10.0
         ))
 
         power_watts = int(power * 1000)

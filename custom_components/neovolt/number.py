@@ -77,9 +77,15 @@ async def async_setup_entry(
         ),
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
-            "dispatch_soc_limit", "Dispatch SOC Limit",
+            "dispatch_charge_soc", "Dispatch Charge Target SOC",
+            10, 100, 1, PERCENTAGE, None, False,
+            default_value=100, icon="mdi:battery-charging-high"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "dispatch_discharge_soc", "Dispatch Discharge Cutoff SOC",
             4, 100, 1, PERCENTAGE, None, False,
-            default_value=100, icon="mdi:battery-sync"
+            default_value=10, icon="mdi:battery-low"
         ),
 
         # PV Capacity (32-bit register, in Watts)
