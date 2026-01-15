@@ -276,17 +276,17 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         """Start force charging with parameters from number entities."""
         power = safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_force_charging_power",
+            f"number.neovolt_{self._device_name}_dispatch_power",
             3.0
         )
         duration = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_force_charging_duration",
+            f"number.neovolt_{self._device_name}_dispatch_duration",
             120.0
         ))
         soc_target = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_charging_soc_target",
+            f"number.neovolt_{self._device_name}_dispatch_soc_limit",
             100.0
         ))
 
@@ -323,17 +323,17 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         """Start force discharging with parameters from number entities."""
         power = safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_force_discharging_power",
+            f"number.neovolt_{self._device_name}_dispatch_power",
             3.0
         )
         duration = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_force_discharging_duration",
+            f"number.neovolt_{self._device_name}_dispatch_duration",
             120.0
         ))
         soc_cutoff = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_discharging_soc_cutoff",
+            f"number.neovolt_{self._device_name}_dispatch_soc_limit",
             20.0
         ))
 
@@ -370,8 +370,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         """Prevent solar from charging battery (minimal discharge command)."""
         duration = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_prevent_solar_charging_duration",
-            480.0
+            f"number.neovolt_{self._device_name}_dispatch_duration",
+            120.0
         ))
         current_soc = self.coordinator.data.get("battery_soc", 20)
         soc_cutoff = max(int(current_soc) - 2, 10)
@@ -408,7 +408,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         """Mode 1: Battery only charges from PV (no grid charging)."""
         duration = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_force_charging_duration",
+            f"number.neovolt_{self._device_name}_dispatch_duration",
             120.0
         ))
 
@@ -440,12 +440,12 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         """Mode 3: Battery follows home load."""
         power = safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_force_discharging_power",
+            f"number.neovolt_{self._device_name}_dispatch_power",
             3.0
         )
         duration = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_force_discharging_duration",
+            f"number.neovolt_{self._device_name}_dispatch_duration",
             120.0
         ))
         power_watts = int(power * 1000)
@@ -480,8 +480,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         """Mode 19: Prevent all battery charging (solar & grid)."""
         duration = int(safe_get_entity_float(
             self._hass,
-            f"number.neovolt_{self._device_name}_prevent_solar_charging_duration",
-            480.0
+            f"number.neovolt_{self._device_name}_dispatch_duration",
+            120.0
         ))
 
         values = [

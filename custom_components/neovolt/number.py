@@ -61,54 +61,25 @@ async def async_setup_entry(
             4, 100, 1, PERCENTAGE, 0x0850, True
         ),
 
-        # Force Charging Controls (local storage, used by switch) - WITH DYNAMIC MAX
+        # Consolidated Dispatch Controls (local storage, used by dispatch mode select)
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
-            "force_charging_power", "Force Charging Power",
-            0.5, max_charge_power, 0.1, UnitOfPower.KILO_WATT, None, False,
-            default_value=min(3.0, max_charge_power), icon="mdi:lightning-bolt",
+            "dispatch_power", "Dispatch Power",
+            0.5, max(max_charge_power, max_discharge_power), 0.1, UnitOfPower.KILO_WATT, None, False,
+            default_value=3.0, icon="mdi:lightning-bolt",
             config_entry=entry
         ),
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
-            "force_charging_duration", "Force Charging Duration",
+            "dispatch_duration", "Dispatch Duration",
             1, 480, 1, UnitOfTime.MINUTES, None, False,
             default_value=120, icon="mdi:timer"
         ),
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
-            "charging_soc_target", "Charging SOC Target",
-            10, 100, 1, PERCENTAGE, None, False,
-            default_value=100, icon="mdi:battery-charging-100"
-        ),
-
-        # Force Discharging Controls (local storage, used by switch) - WITH DYNAMIC MAX
-        NeovoltNumber(
-            coordinator, device_info, device_name, client, hass,
-            "force_discharging_power", "Force Discharging Power",
-            0.5, max_discharge_power, 0.1, UnitOfPower.KILO_WATT, None, False,
-            default_value=min(3.0, max_discharge_power), icon="mdi:lightning-bolt-outline",
-            config_entry=entry
-        ),
-        NeovoltNumber(
-            coordinator, device_info, device_name, client, hass,
-            "force_discharging_duration", "Force Discharging Duration",
-            1, 480, 1, UnitOfTime.MINUTES, None, False,
-            default_value=120, icon="mdi:timer-outline"
-        ),
-        NeovoltNumber(
-            coordinator, device_info, device_name, client, hass,
-            "discharging_soc_cutoff", "Discharging SOC Cutoff",
-            4, 50, 1, PERCENTAGE, None, False,
-            default_value=20, icon="mdi:battery-charging-20"
-        ),
-
-        # Prevent Solar Charging Controls (local storage, used by switch)
-        NeovoltNumber(
-            coordinator, device_info, device_name, client, hass,
-            "prevent_solar_charging_duration", "Prevent Solar Charging Duration",
-            1, 1440, 1, UnitOfTime.MINUTES, None, False,
-            default_value=480, icon="mdi:timer-lock"
+            "dispatch_soc_limit", "Dispatch SOC Limit",
+            4, 100, 1, PERCENTAGE, None, False,
+            default_value=100, icon="mdi:battery-sync"
         ),
 
         # PV Capacity (32-bit register, in Watts)
@@ -182,13 +153,17 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     def native_max_value(self) -> float:
         """Return the maximum value (dynamically from config if applicable)."""
         # Update max value from config entry for power settings
-        if self._config_entry and self._key in ["force_charging_power", "force_discharging_power", "pv_capacity"]:
-            config_key = CONF_MAX_CHARGE_POWER if "charging" in self._key or self._key == "pv_capacity" else CONF_MAX_DISCHARGE_POWER
-            config_max = self._config_entry.data.get(config_key, self._attr_native_max_value)
-            # pv_capacity is in Watts, config is in kW
-            new_max = config_max * 1000 if self._key == "pv_capacity" else config_max
+        if self._config_entry and self._key in ["dispatch_power", "pv_capacity"]:
+            if self._key == "dispatch_power":
+                # Use the higher of charge/discharge max power
+                charge_max = self._config_entry.data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
+                discharge_max = self._config_entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
+                new_max = max(charge_max, discharge_max)
+            else:
+                # pv_capacity is in Watts, config is in kW
+                new_max = self._config_entry.data.get(CONF_MAX_CHARGE_POWER, self._attr_native_max_value) * 1000
             if new_max != self._attr_native_max_value:
-                _LOGGER.info(f"Updated max value for {self._key} to {new_max}")
+                _LOGGER.debug(f"Updated max value for {self._key} to {new_max}")
                 self._attr_native_max_value = new_max
         return self._attr_native_max_value
 
