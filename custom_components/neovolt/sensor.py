@@ -19,6 +19,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 
@@ -401,6 +402,14 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
             except:
                 mode = "Dynamic Export"
                 power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
+            
+            # For Dynamic Export, get time remaining from the manager
+            if hasattr(self.coordinator, 'dynamic_export_manager'):
+                manager = self.coordinator.dynamic_export_manager
+                if manager.is_running and manager._start_time and manager._duration_minutes:
+                    elapsed_minutes = (dt_util.now() - manager._start_time).total_seconds() / 60.0
+                    remaining_minutes = max(0, manager._duration_minutes - elapsed_minutes)
+                    dispatch_time = int(remaining_minutes * 60)  # Convert to seconds
         elif dispatch_mode == 1:
             mode = "Battery PV Only"
         elif dispatch_mode == 3:
@@ -428,8 +437,8 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
         else:
             status = mode
 
-        # Add time remaining (not shown for Dynamic Export as it auto-renews)
-        if dispatch_time > 0 and dispatch_mode != DISPATCH_MODE_DYNAMIC_EXPORT:
+        # Add time remaining (shown for all modes including Dynamic Export now)
+        if dispatch_time > 0:
             hours = dispatch_time // 3600
             minutes = (dispatch_time % 3600) // 60
             if hours > 0:

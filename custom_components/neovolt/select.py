@@ -261,7 +261,11 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         
         # Stop dynamic export manager if running
         if hasattr(self.coordinator, 'dynamic_export_manager'):
-            await self.coordinator.dynamic_export_manager.stop()
+            try:
+                await self.coordinator.dynamic_export_manager.stop()
+                _LOGGER.info("Dynamic Export manager stopped")
+            except Exception as e:
+                _LOGGER.error(f"Error stopping Dynamic Export manager: {e}")
         
         await self._hass.async_add_executor_job(
             self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
@@ -383,9 +387,15 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             self.coordinator.dynamic_export_manager = DynamicExportManager(
                 self._hass, self.coordinator, self._client, self._device_name
             )
+            _LOGGER.debug("Created new Dynamic Export manager instance")
         
         # Start the dynamic export control loop
-        await self.coordinator.dynamic_export_manager.start()
+        try:
+            await self.coordinator.dynamic_export_manager.start()
+            _LOGGER.info("Dynamic Export manager started successfully")
+        except Exception as e:
+            _LOGGER.error(f"Failed to start Dynamic Export manager: {e}", exc_info=True)
+            return
         
         # Set optimistic values for UI
         self.coordinator.set_optimistic_value("dispatch_start", 1)

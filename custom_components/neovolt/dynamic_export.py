@@ -85,6 +85,8 @@ class DynamicExportManager:
         self._task: Optional[asyncio.Task] = None
         self._last_update_time: Optional[datetime] = None
         self._last_commanded_power: float = 0.0
+        self._start_time: Optional[datetime] = None
+        self._duration_minutes: Optional[int] = None
 
         # Get max discharge power from config entry
         entry = None
@@ -116,13 +118,28 @@ class DynamicExportManager:
             _LOGGER.warning("Dynamic Export already running")
             return
 
-        _LOGGER.info("Starting Dynamic Export mode")
+        # Get duration from number entity
+        duration_minutes = int(safe_get_entity_float(
+            self._hass,
+            f"number.neovolt_{self._device_name}_dispatch_duration",
+            120.0,
+        ))
+
+        _LOGGER.info(f"Starting Dynamic Export mode (duration: {duration_minutes} minutes)")
         self._running = True
         self._last_update_time = None
         self._last_commanded_power = 0.0
+        self._start_time = dt_util.now()
+        self._duration_minutes = duration_minutes
 
-        # Start the control loop
-        self._task = asyncio.create_task(self._control_loop())
+        # Start the control loop as a background task
+        try:
+            self._task = self._hass.async_create_task(self._control_loop())
+            _LOGGER.info("Dynamic Export control loop task created successfully")
+        except Exception as e:
+            _LOGGER.error(f"Failed to create Dynamic Export task: {e}", exc_info=True)
+            self._running = False
+            raise
 
     async def stop(self) -> None:
         """Stop the Dynamic Export control loop."""
@@ -142,19 +159,36 @@ class DynamicExportManager:
 
     async def _control_loop(self) -> None:
         """Main control loop for Dynamic Export mode."""
+        _LOGGER.info("Dynamic Export control loop started")
+        
         try:
             while self._running:
+                # Check if duration has expired
+                if self._start_time and self._duration_minutes:
+                    elapsed = (dt_util.now() - self._start_time).total_seconds() / 60.0
+                    if elapsed >= self._duration_minutes:
+                        _LOGGER.info(
+                            f"Dynamic Export duration expired ({self._duration_minutes} minutes). "
+                            "Stopping automatically."
+                        )
+                        await self._stop_dispatch()
+                        break
+                
                 try:
+                    _LOGGER.debug("Dynamic Export: Running update cycle")
                     await self._update_discharge_power()
                 except Exception as e:
                     _LOGGER.error(f"Error in Dynamic Export control loop: {e}", exc_info=True)
 
                 # Wait for next update interval
+                _LOGGER.debug(f"Dynamic Export: Sleeping for {DYNAMIC_EXPORT_UPDATE_INTERVAL}s")
                 await asyncio.sleep(DYNAMIC_EXPORT_UPDATE_INTERVAL)
 
         except asyncio.CancelledError:
-            _LOGGER.debug("Dynamic Export control loop cancelled")
+            _LOGGER.info("Dynamic Export control loop cancelled")
             raise
+        finally:
+            _LOGGER.info("Dynamic Export control loop ended")
 
     async def _update_discharge_power(self) -> None:
         """Calculate and update discharge power based on current load and PV generation."""
@@ -175,7 +209,12 @@ class DynamicExportManager:
         # Get current load and PV generation from coordinator data
         data = self._coordinator.data
         current_load_w = data.get("total_house_load")
-        pv_production_w = data.get("current_pv_production", 0)
+        
+        # Get PV production from the correct sensor (pv_power_total)
+        pv_production_w = data.get("pv_power_total", 0)
+        if pv_production_w is None:
+            pv_production_w = 0
+            _LOGGER.debug("PV power sensor unavailable, assuming 0W")
 
         # Validate we have load data
         if current_load_w is None:
@@ -214,7 +253,8 @@ class DynamicExportManager:
         if target_discharge_kw < 0.5:
             _LOGGER.info(
                 f"Calculated discharge {target_discharge_kw:.2f}kW is below minimum (0.5kW). "
-                f"PV ({pv_production_w}W) is covering load. Stopping Dynamic Export."
+                f"Load: {current_load_w}W, PV: {pv_production_w}W, Net: {net_load_w}W. "
+                "Stopping Dynamic Export - PV is covering load."
             )
             # Stop dispatch to avoid unnecessary battery cycles
             await self._stop_dispatch()
