@@ -25,6 +25,12 @@ DEFAULT_MAX_DISCHARGE_POWER = 5.0
 MIN_POWER = 0.5
 MAX_POWER_LIMIT = 100.0  # 100kW max for safety (supports parallel systems)
 
+# Dynamic Export mode configuration
+CONF_DYNAMIC_EXPORT_TARGET = "dynamic_export_target"
+DEFAULT_DYNAMIC_EXPORT_TARGET = 1.0  # 1kW above load by default
+DYNAMIC_EXPORT_UPDATE_INTERVAL = 10  # seconds between power adjustments
+DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD = 0.3  # kW - only update if change > this
+
 # SOC (State of Charge) conversion constants
 # The inverter stores SOC as a value from 0-255, where 255 = 100%
 # Conversion factor: SOC% / 0.392157 = register value (0-255)
@@ -42,6 +48,7 @@ MODBUS_OFFSET = 32000
 # Dispatch control modes
 DISPATCH_MODE_POWER_ONLY = 0  # Control by power only
 DISPATCH_MODE_POWER_WITH_SOC = 2  # Control by power with SOC limit
+DISPATCH_MODE_DYNAMIC_EXPORT = 99  # Custom mode for dynamic export (internal only)
 
 # Dispatch command duration default (seconds)
 # Used when resetting dispatch - maintains previous command for 90 seconds

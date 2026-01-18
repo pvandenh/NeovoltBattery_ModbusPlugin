@@ -14,8 +14,10 @@ from .const import (
     DOMAIN,
     CONF_MAX_CHARGE_POWER,
     CONF_MAX_DISCHARGE_POWER,
+    CONF_DYNAMIC_EXPORT_TARGET,
     DEFAULT_MAX_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
+    DEFAULT_DYNAMIC_EXPORT_TARGET,
     DEVICE_ROLE_FOLLOWER,
 )
 
@@ -86,6 +88,15 @@ async def async_setup_entry(
             "dispatch_discharge_soc", "Dispatch Discharge Cutoff SOC",
             4, 100, 1, PERCENTAGE, None, False,
             default_value=10, icon="mdi:battery-low"
+        ),
+
+        # Dynamic Export Target (local storage, used by dynamic export mode)
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "dynamic_export_target", "Dynamic Export Target",
+            0.5, max_discharge_power, 0.1, UnitOfPower.KILO_WATT, None, False,
+            default_value=DEFAULT_DYNAMIC_EXPORT_TARGET, icon="mdi:transmission-tower-export",
+            config_entry=entry
         ),
 
         # PV Capacity (32-bit register, in Watts)
@@ -159,12 +170,15 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     def native_max_value(self) -> float:
         """Return the maximum value (dynamically from config if applicable)."""
         # Update max value from config entry for power settings
-        if self._config_entry and self._key in ["dispatch_power", "pv_capacity"]:
+        if self._config_entry and self._key in ["dispatch_power", "dynamic_export_target", "pv_capacity"]:
             if self._key == "dispatch_power":
                 # Use the higher of charge/discharge max power
                 charge_max = self._config_entry.data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
                 discharge_max = self._config_entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
                 new_max = max(charge_max, discharge_max)
+            elif self._key == "dynamic_export_target":
+                # Use max discharge power
+                new_max = self._config_entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
             else:
                 # pv_capacity is in Watts, config is in kW
                 new_max = self._config_entry.data.get(CONF_MAX_CHARGE_POWER, self._attr_native_max_value) * 1000

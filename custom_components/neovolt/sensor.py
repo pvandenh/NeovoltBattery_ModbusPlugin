@@ -354,6 +354,7 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_info, device_name):
         """Initialize the dispatch status sensor."""
         super().__init__(coordinator)
+        self._device_name = device_name
         self._attr_name = f"Neovolt {device_name} Dispatch Status"
         self._attr_unique_id = f"neovolt_{device_name}_dispatch_status"
         self._attr_icon = "mdi:information-outline"
@@ -367,6 +368,8 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         """Return human-readable dispatch status."""
+        from .const import DISPATCH_MODE_DYNAMIC_EXPORT
+        
         data = self.coordinator.data
         dispatch_start = data.get("dispatch_start", 0)
 
@@ -381,7 +384,24 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
         mode = None
         power_kw = None
 
-        if dispatch_mode == 1:
+        if dispatch_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
+            # Get current load and target for Dynamic Export
+            load = data.get("total_house_load", 0)
+            
+            # Try to get target export value
+            try:
+                from .select import safe_get_entity_float
+                target = safe_get_entity_float(
+                    self.hass,
+                    f"number.neovolt_{self._device_name}_dynamic_export_target",
+                    1.0
+                )
+                mode = f"Dynamic Export (Load: {load/1000:.1f}kW + {target:.1f}kW)"
+                power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
+            except:
+                mode = "Dynamic Export"
+                power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
+        elif dispatch_mode == 1:
             mode = "Battery PV Only"
         elif dispatch_mode == 3:
             mode = "Load Following"
@@ -390,12 +410,12 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
             mode = "No Battery Charge"
         elif dispatch_mode == 2:
             if dispatch_power > 0:
-                mode = "Force Charging"
+                mode = "Force Discharging"
                 power_kw = dispatch_power / 1000
             elif dispatch_power == -50:
                 mode = "Preventing Solar Charge"
             elif dispatch_power < 0:
-                mode = "Force Discharging"
+                mode = "Force Charging"
                 power_kw = abs(dispatch_power) / 1000
             else:
                 mode = "Dispatch Active"
@@ -403,12 +423,13 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
             mode = f"Mode {dispatch_mode}"
 
         # Build status string
-        status = mode
-        if power_kw:
+        if power_kw and dispatch_mode != DISPATCH_MODE_DYNAMIC_EXPORT:
             status = f"{mode} @ {power_kw:.1f}kW"
+        else:
+            status = mode
 
-        # Add time remaining
-        if dispatch_time > 0:
+        # Add time remaining (not shown for Dynamic Export as it auto-renews)
+        if dispatch_time > 0 and dispatch_mode != DISPATCH_MODE_DYNAMIC_EXPORT:
             hours = dispatch_time // 3600
             minutes = (dispatch_time % 3600) // 60
             if hours > 0:
@@ -421,11 +442,21 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         """Return detailed dispatch state as attributes."""
+        from .const import DISPATCH_MODE_DYNAMIC_EXPORT
+        
         data = self.coordinator.data
-        return {
+        attrs = {
             "dispatch_active": data.get("dispatch_start", 0) == 1,
             "dispatch_power_w": data.get("dispatch_power", 0),
             "dispatch_mode": data.get("dispatch_mode", 0),
             "dispatch_soc_value": data.get("dispatch_soc", 0),
             "dispatch_time_remaining_s": data.get("dispatch_time_remaining", 0),
         }
+        
+        # Add Dynamic Export specific attributes
+        if data.get("dispatch_mode", 0) == DISPATCH_MODE_DYNAMIC_EXPORT:
+            attrs["dynamic_export_active"] = True
+            if hasattr(self.coordinator, 'dynamic_export_manager'):
+                attrs["dynamic_export_running"] = self.coordinator.dynamic_export_manager.is_running
+        
+        return attrs
