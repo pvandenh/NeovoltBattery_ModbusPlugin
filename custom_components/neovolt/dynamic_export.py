@@ -1,7 +1,7 @@
 """Dynamic Export Manager for Neovolt Solar Inverter.
 
 This module manages the Dynamic Export dispatch mode, which continuously
-adjusts battery discharge to maintain load + target export power.
+adjusts battery discharge/charge to maintain target export power.
 """
 import asyncio
 import logging
@@ -13,7 +13,9 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_MAX_DISCHARGE_POWER,
+    CONF_MAX_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
+    DEFAULT_MAX_CHARGE_POWER,
     DISPATCH_MODE_DYNAMIC_EXPORT,
     DISPATCH_MODE_POWER_WITH_SOC,
     DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD,
@@ -60,7 +62,7 @@ def soc_percent_to_register(soc_percent: float) -> int:
 
 
 class DynamicExportManager:
-    """Manages Dynamic Export mode - continuous adjustment of battery discharge."""
+    """Manages Dynamic Export mode - continuous adjustment of battery discharge/charge."""
 
     def __init__(
         self,
@@ -88,7 +90,7 @@ class DynamicExportManager:
         self._start_time: Optional[datetime] = None
         self._duration_minutes: Optional[int] = None
 
-        # Get max discharge power from config entry
+        # Get max charge/discharge power from config entry
         entry = None
         for config_entry in hass.config_entries.async_entries("neovolt"):
             if config_entry.data.get("device_name") == device_name:
@@ -99,12 +101,17 @@ class DynamicExportManager:
             self._max_discharge_power = entry.data.get(
                 CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER
             )
+            self._max_charge_power = entry.data.get(
+                CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER
+            )
         else:
             self._max_discharge_power = DEFAULT_MAX_DISCHARGE_POWER
+            self._max_charge_power = DEFAULT_MAX_CHARGE_POWER
 
         _LOGGER.info(
             f"Initialized Dynamic Export Manager for {device_name} "
-            f"(max discharge: {self._max_discharge_power}kW)"
+            f"(max discharge: {self._max_discharge_power}kW, "
+            f"max charge: {self._max_charge_power}kW)"
         )
 
     @property
@@ -176,7 +183,7 @@ class DynamicExportManager:
                 
                 try:
                     _LOGGER.debug("Dynamic Export: Running update cycle")
-                    await self._update_discharge_power()
+                    await self._update_battery_power()
                 except Exception as e:
                     _LOGGER.error(f"Error in Dynamic Export control loop: {e}", exc_info=True)
 
@@ -190,8 +197,12 @@ class DynamicExportManager:
         finally:
             _LOGGER.info("Dynamic Export control loop ended")
 
-    async def _update_discharge_power(self) -> None:
-        """Calculate and update discharge power based on current load and PV generation."""
+    async def _update_battery_power(self) -> None:
+        """Calculate and update battery power to maintain target export.
+        
+        Positive power = discharge battery
+        Negative power = charge battery (reduced rate)
+        """
         # Get target export from number entity
         target_export_kw = safe_get_entity_float(
             self._hass,
@@ -209,9 +220,8 @@ class DynamicExportManager:
         # Get current load and PV generation from coordinator data
         data = self._coordinator.data
         current_load_w = data.get("total_house_load")
-        
-        # Get PV production from the correct sensor (pv_power_total)
         pv_production_w = data.get("pv_power_total", 0)
+        
         if pv_production_w is None:
             pv_production_w = 0
             _LOGGER.debug("PV power sensor unavailable, assuming 0W")
@@ -221,83 +231,75 @@ class DynamicExportManager:
             _LOGGER.warning("Cannot calculate Dynamic Export - house load unavailable")
             return
 
-        # Calculate net load (load minus PV contribution)
-        # PV offsets the load, so we need less battery discharge
-        net_load_w = current_load_w - pv_production_w
-
-        # Handle negative load (in multi-inverter setups, this can happen)
-        if current_load_w < 0:
-            _LOGGER.debug(
-                f"House load is negative ({current_load_w}W) - common in multi-inverter setups. "
-                f"PV: {pv_production_w}W, Net load: {net_load_w}W. "
-                "Setting discharge to target export only."
-            )
-            # Just export the target amount
-            target_discharge_kw = target_export_kw
-        else:
-            # Normal case: discharge = (load - PV) + target export
-            # This ensures we export the target amount while PV covers what it can
-            target_discharge_kw = (net_load_w / 1000.0) + target_export_kw
-            
-            # If net load is negative (PV producing more than load), 
-            # we only need to discharge enough to reach target export
-            if net_load_w < 0:
-                # PV is already exporting, we just need to add enough to reach target
-                target_discharge_kw = target_export_kw
-
-        # Clamp to min/max discharge power
-        # Note: minimum is 0 (not 0.5) to allow zero discharge when PV covers everything
-        target_discharge_kw = max(0.0, min(target_discharge_kw, self._max_discharge_power))
+        # Calculate current grid export/import
+        # Positive grid_power = importing, Negative = exporting
+        grid_power_w = data.get("grid_power_total", 0) or 0
+        current_export_w = -grid_power_w if grid_power_w < 0 else 0
         
-        # If target is below minimum inverter discharge (0.5kW), stop discharging
-        if target_discharge_kw < 0.5:
-            _LOGGER.info(
-                f"Calculated discharge {target_discharge_kw:.2f}kW is below minimum (0.5kW). "
-                f"Load: {current_load_w}W, PV: {pv_production_w}W, Net: {net_load_w}W. "
-                "Stopping Dynamic Export - PV is covering load."
-            )
-            # Stop dispatch to avoid unnecessary battery cycles
-            await self._stop_dispatch()
-            return
-
-        # Check if update is needed (debouncing)
-        power_change_kw = abs(target_discharge_kw - self._last_commanded_power)
-
-        # Always update if enough time has passed (stale data protection)
-        now = dt_util.now()
-        time_since_update = None
-        if self._last_update_time:
-            time_since_update = (now - self._last_update_time).total_seconds()
-
-        # Update if:
-        # 1. Power changed significantly (> debounce threshold), OR
-        # 2. More than 60 seconds since last update (prevent stale commands)
-        should_update = (
-            power_change_kw >= DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD
-            or time_since_update is None
-            or time_since_update >= 60
+        # Calculate target export in watts
+        target_export_w = target_export_kw * 1000
+        
+        # Calculate the adjustment needed
+        # If we're exporting less than target, increase battery discharge (positive)
+        # If we're exporting more than target, reduce battery charge (negative)
+        export_delta_w = target_export_w - current_export_w
+        
+        _LOGGER.debug(
+            f"Dynamic Export calculation: "
+            f"Load={current_load_w}W, PV={pv_production_w}W, "
+            f"Grid={grid_power_w}W, Current Export={current_export_w}W, "
+            f"Target Export={target_export_w}W, Delta={export_delta_w}W"
         )
 
-        if not should_update:
+        # Determine battery action based on export delta
+        if export_delta_w > 100:  # Need more export (100W deadband)
+            # Discharge battery to increase export
+            target_battery_power_kw = export_delta_w / 1000.0
+            target_battery_power_kw = max(0.5, min(target_battery_power_kw, self._max_discharge_power))
+            
+            _LOGGER.info(
+                f"Dynamic Export: Need more export. "
+                f"Discharging battery at {target_battery_power_kw:.2f}kW"
+            )
+            
+            await self._send_discharge_command(target_battery_power_kw, soc_cutoff)
+            
+        elif export_delta_w < -100:  # Exporting too much (100W deadband)
+            # Reduce battery charging to decrease export
+            # The amount we need to "absorb" from the grid
+            excess_export_kw = abs(export_delta_w) / 1000.0
+            
+            # Limit charge rate to configured maximum
+            target_charge_kw = min(excess_export_kw, self._max_charge_power)
+            
+            # Only charge if above minimum (0.5kW)
+            if target_charge_kw >= 0.5:
+                _LOGGER.info(
+                    f"Dynamic Export: Excess export detected. "
+                    f"Charging battery at {target_charge_kw:.2f}kW to reduce export"
+                )
+                
+                await self._send_charge_command(target_charge_kw, 100)  # Charge to 100% SOC
+            else:
+                _LOGGER.debug(
+                    f"Dynamic Export: Excess export {excess_export_kw:.2f}kW below minimum charge (0.5kW). "
+                    "Stopping dispatch."
+                )
+                await self._stop_dispatch()
+                return
+                
+        else:
+            # Within deadband - maintain current state or stop
             _LOGGER.debug(
-                f"Skipping Dynamic Export update - change {power_change_kw:.2f}kW "
-                f"below threshold {DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD}kW, "
-                f"last update {time_since_update:.0f}s ago"
+                f"Dynamic Export: Within target range "
+                f"(current: {current_export_w}W, target: {target_export_w}W). "
+                "No adjustment needed."
             )
             return
-
-        # Send discharge command
-        await self._send_discharge_command(target_discharge_kw, soc_cutoff)
 
         # Update tracking
-        self._last_commanded_power = target_discharge_kw
-        self._last_update_time = now
-
-        _LOGGER.info(
-            f"Dynamic Export: Load={current_load_w}W, PV={pv_production_w}W, "
-            f"Net Load={(current_load_w - pv_production_w)}W, Target Export={target_export_kw}kW, "
-            f"Commanded Discharge={target_discharge_kw:.2f}kW, Cutoff SOC={soc_cutoff}%"
-        )
+        self._last_commanded_power = target_battery_power_kw if export_delta_w > 0 else -target_charge_kw
+        self._last_update_time = dt_util.now()
 
     async def _send_discharge_command(self, power_kw: float, soc_cutoff: int) -> None:
         """Send force discharge command to inverter.
@@ -310,7 +312,6 @@ class DynamicExportManager:
         soc_value = soc_percent_to_register(soc_cutoff)
 
         # Build dispatch command for force discharge
-        # Use extended timeout (10 minutes) to prevent premature expiry
         timeout_seconds = 600  # 10 minutes
 
         values = [
@@ -341,11 +342,52 @@ class DynamicExportManager:
             _LOGGER.error(f"Failed to send Dynamic Export discharge command: {e}")
             raise
 
+    async def _send_charge_command(self, power_kw: float, soc_target: int) -> None:
+        """Send force charge command to inverter.
+
+        Args:
+            power_kw: Charge power in kW
+            soc_target: SOC target percentage (0-100)
+        """
+        power_watts = int(power_kw * 1000)
+        soc_value = soc_percent_to_register(soc_target)
+
+        # Build dispatch command for force charge
+        timeout_seconds = 600  # 10 minutes
+
+        values = [
+            1,                              # Para1: Dispatch start
+            0,                              # Para2 high byte
+            MODBUS_OFFSET - power_watts,    # Para2 low: CHARGE = 32000 - watts
+            0,                              # Para3 high byte
+            0,                              # Para3 low: Reactive power = 0
+            DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
+            soc_value,                      # Para5: SOC target
+            0,                              # Para6 high byte
+            min(timeout_seconds, 65535),    # Para6 low: Time (seconds)
+            255,                            # Para7: Energy routing (default)
+            0,                              # Para8: PV switch (auto)
+        ]
+
+        try:
+            await self._hass.async_add_executor_job(
+                self._client.write_registers, 0x0880, values
+            )
+
+            # Update coordinator with optimistic values
+            self._coordinator.set_optimistic_value("dispatch_start", 1)
+            self._coordinator.set_optimistic_value("dispatch_power", -power_watts)
+            self._coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_EXPORT)
+
+        except Exception as e:
+            _LOGGER.error(f"Failed to send Dynamic Export charge command: {e}")
+            raise
+
     async def _stop_dispatch(self) -> None:
         """Stop dispatch and exit Dynamic Export mode."""
         from .const import DISPATCH_RESET_VALUES
         
-        _LOGGER.info("Stopping Dynamic Export - PV is covering load")
+        _LOGGER.info("Stopping Dynamic Export - within target range or conditions not met")
         
         try:
             await self._hass.async_add_executor_job(
