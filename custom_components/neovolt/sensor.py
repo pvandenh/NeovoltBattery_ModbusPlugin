@@ -369,7 +369,7 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         """Return human-readable dispatch status."""
-        from .const import DISPATCH_MODE_DYNAMIC_EXPORT
+        from .const import DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_UNLIMITED_CHARGE
         
         data = self.coordinator.data
         dispatch_start = data.get("dispatch_start", 0)
@@ -385,7 +385,12 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
         mode = None
         power_kw = None
 
-        if dispatch_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
+        # Check for unlimited charge mode FIRST
+        if dispatch_mode == DISPATCH_MODE_UNLIMITED_CHARGE:
+            mode = "Force Charge (Unlimited)"
+            power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
+            
+        elif dispatch_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
             # Get current load and target for Dynamic Export
             load = data.get("total_house_load", 0)
             
@@ -410,6 +415,7 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
                     elapsed_minutes = (dt_util.now() - manager._start_time).total_seconds() / 60.0
                     remaining_minutes = max(0, manager._duration_minutes - elapsed_minutes)
                     dispatch_time = int(remaining_minutes * 60)  # Convert to seconds
+                    
         elif dispatch_mode == 1:
             mode = "Battery PV Only"
         elif dispatch_mode == 3:
@@ -432,13 +438,22 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
             mode = f"Mode {dispatch_mode}"
 
         # Build status string
-        if power_kw and dispatch_mode != DISPATCH_MODE_DYNAMIC_EXPORT:
+        if power_kw and dispatch_mode not in [DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_UNLIMITED_CHARGE]:
             status = f"{mode} @ {power_kw:.1f}kW"
         else:
             status = mode
 
-        # Add time remaining (shown for all modes including Dynamic Export now)
-        if dispatch_time > 0:
+        # Add time remaining (for unlimited charge, show "auto-renewing")
+        if dispatch_mode == DISPATCH_MODE_UNLIMITED_CHARGE:
+            hours = dispatch_time // 3600
+            minutes = (dispatch_time % 3600) // 60
+            if hours > 0:
+                status = f"{status} ({hours}h {minutes}m, auto-renewing)"
+            elif minutes > 0:
+                status = f"{status} ({minutes}m, auto-renewing)"
+            else:
+                status = f"{status} (auto-renewing)"
+        elif dispatch_time > 0:
             hours = dispatch_time // 3600
             minutes = (dispatch_time % 3600) // 60
             if hours > 0:
@@ -451,7 +466,7 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         """Return detailed dispatch state as attributes."""
-        from .const import DISPATCH_MODE_DYNAMIC_EXPORT
+        from .const import DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_UNLIMITED_CHARGE
         
         data = self.coordinator.data
         attrs = {
@@ -467,5 +482,10 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
             attrs["dynamic_export_active"] = True
             if hasattr(self.coordinator, 'dynamic_export_manager'):
                 attrs["dynamic_export_running"] = self.coordinator.dynamic_export_manager.is_running
+        
+        # Add Unlimited Charge specific attributes
+        if data.get("dispatch_mode", 0) == DISPATCH_MODE_UNLIMITED_CHARGE:
+            attrs["unlimited_charge_active"] = True
+            attrs["auto_renewal_enabled"] = True
         
         return attrs

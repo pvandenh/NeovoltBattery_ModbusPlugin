@@ -49,10 +49,15 @@ MODBUS_OFFSET = 32000
 DISPATCH_MODE_POWER_ONLY = 0  # Control by power only
 DISPATCH_MODE_POWER_WITH_SOC = 2  # Control by power with SOC limit
 DISPATCH_MODE_DYNAMIC_EXPORT = 99  # Custom mode for dynamic export (internal only)
+DISPATCH_MODE_UNLIMITED_CHARGE = 98  # Custom mode for unlimited force charge (internal only)
 
 # Dispatch command duration default (seconds)
 # Used when resetting dispatch - maintains previous command for 90 seconds
 DISPATCH_DURATION_DEFAULT = 90
+
+# Unlimited charge mode timer settings
+UNLIMITED_CHARGE_TIMER_DURATION = 3600  # 1 hour per renewal
+UNLIMITED_CHARGE_RENEWAL_THRESHOLD = 600  # Renew when <10 minutes remain
 
 # Dispatch reset command (11 registers: Para1-Para8)
 # Format: [Para1, Para2_hi, Para2_lo, Para3_hi, Para3_lo, Para4, Para5, Para6_hi, Para6_lo, Para7, Para8]

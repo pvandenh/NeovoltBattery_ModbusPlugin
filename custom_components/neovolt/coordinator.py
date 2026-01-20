@@ -28,6 +28,9 @@ from .const import (
     DEFAULT_STALENESS_THRESHOLD,
     RECOVERY_COOLDOWN_SECONDS,
     REGISTER_BLOCKS,
+    DISPATCH_MODE_UNLIMITED_CHARGE,
+    UNLIMITED_CHARGE_TIMER_DURATION,
+    UNLIMITED_CHARGE_RENEWAL_THRESHOLD,
 )
 from .modbus_client import NeovoltModbusClient
 
@@ -317,7 +320,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             options=new_options
         )
         _LOGGER.debug("Saved persistent daily tracking data")
-
+    
     async def _async_update_data(self):
         """Fetch data from the inverter with adaptive polling and auto-recovery."""
         now = dt_util.now()
@@ -345,6 +348,9 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             
             # Now update timestamp for stale data detection (AFTER data merge)
             self._last_successful_data_time = now
+
+            # NEW: Check and renew unlimited charge timer if needed
+            await self._check_and_renew_unlimited_charge()
 
             # Return merged cache to ensure all previously seen keys are available
             # even if some blocks failed to read this cycle
@@ -374,6 +380,66 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
             # Only raise UpdateFailed if no cached data or data is too old
             raise UpdateFailed(f"Error communicating with inverter: {err}") from err
+
+    async def _check_and_renew_unlimited_charge(self) -> None:
+        """
+        Check if unlimited charge mode needs timer renewal and renew if necessary.
+        
+        This is called during each coordinator update cycle when unlimited charge
+        mode is active.
+        """
+        data = self.data
+        
+        # Check if unlimited charge mode is active
+        unlimited_active = data.get("dispatch_unlimited_charge", False)
+        if not unlimited_active:
+            return
+        
+        # Check dispatch status
+        dispatch_start = data.get("dispatch_start", 0)
+        if dispatch_start != 1:
+            # Dispatch stopped - clear unlimited flag
+            self.set_optimistic_value("dispatch_unlimited_charge", False)
+            return
+        
+        # Check time remaining
+        time_remaining = data.get("dispatch_time_remaining", 0)
+        
+        if time_remaining < UNLIMITED_CHARGE_RENEWAL_THRESHOLD:
+            _LOGGER.info(
+                f"Unlimited charge timer below threshold ({time_remaining}s remaining), "
+                f"renewing for {UNLIMITED_CHARGE_TIMER_DURATION}s"
+            )
+            
+            try:
+                # Get current power setting
+                dispatch_power = data.get("dispatch_power", 0)
+                power_watts = abs(dispatch_power)  # Get absolute value
+                
+                # Build renewal command
+                values = [
+                    1,                                      # Para1: Dispatch start
+                    0,                                      # Para2 high byte
+                    32000 - power_watts,                    # Para2 low: CHARGE
+                    0,                                      # Para3 high byte
+                    0,                                      # Para3 low: Reactive power = 0
+                    2,                                      # Para4: Mode 2 (SOC control)
+                    250,                                    # Para5: SOC target = 100%
+                    0,                                      # Para6 high byte
+                    UNLIMITED_CHARGE_TIMER_DURATION,        # Para6 low: Fresh timer
+                    255,                                    # Para7: Energy routing
+                    0,                                      # Para8: PV switch (auto)
+                ]
+                
+                # Send renewal command
+                await self.hass.async_add_executor_job(
+                    self.client.write_registers, 0x0880, values
+                )
+                
+                _LOGGER.info("Successfully renewed unlimited charge timer")
+                
+            except Exception as e:
+                _LOGGER.error(f"Failed to renew unlimited charge timer: {e}")
 
     async def _perform_recovery(self) -> None:
         """Perform recovery by forcing a reconnection."""
@@ -669,7 +735,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             # Flag if this is an estimated value (missing one source)
             data["house_load_estimated"] = available_sources < 3
         else:
-            # Not enough data for reliable calculation - FIXED INDENTATION
+            # Not enough data for reliable calculation
             data["total_house_load"] = None
             data["house_load_estimated"] = None
             data["excess_grid_export"] = 0

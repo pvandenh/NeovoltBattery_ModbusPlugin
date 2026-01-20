@@ -13,12 +13,14 @@ from .const import (
     DEVICE_ROLE_FOLLOWER,
     DISPATCH_MODE_POWER_WITH_SOC,
     DISPATCH_MODE_DYNAMIC_EXPORT,
+    DISPATCH_MODE_UNLIMITED_CHARGE,
     DISPATCH_RESET_VALUES,
     DOMAIN,
     MAX_SOC_PERCENT,
     MIN_SOC_PERCENT,
     MIN_SOC_REGISTER,
     MODBUS_OFFSET,
+    UNLIMITED_CHARGE_TIMER_DURATION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -188,6 +190,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
     _attr_options = [
         "Normal",
         "Force Charge",
+        "Force Charge (No SOC Limit)",
         "Force Discharge",
         "Dynamic Export",
         "No Battery Charge",
@@ -220,6 +223,10 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if dispatch_start != 1:
             return "Normal"
 
+        # Check for custom unlimited charge mode
+        if dispatch_mode == DISPATCH_MODE_UNLIMITED_CHARGE:
+            return "Force Charge (No SOC Limit)"
+
         # Check for Dynamic Export mode (custom mode flag)
         if dispatch_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
             return "Dynamic Export"
@@ -244,6 +251,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
                 await self._stop_dispatch()
             elif option == "Force Charge":
                 await self._start_force_charge()
+            elif option == "Force Charge (No SOC Limit)":
+                await self._start_force_charge_unlimited()
             elif option == "Force Discharge":
                 await self._start_force_discharge()
             elif option == "Dynamic Export":
@@ -273,6 +282,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         self.coordinator.set_optimistic_value("dispatch_start", 0)
         self.coordinator.set_optimistic_value("dispatch_power", 0)
         self.coordinator.set_optimistic_value("dispatch_mode", 0)
+        self.coordinator.set_optimistic_value("dispatch_unlimited_charge", False)
         await self.coordinator.async_request_refresh()
 
     async def _start_force_charge(self):
@@ -324,6 +334,51 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_power", -power_watts)
         self.coordinator.set_optimistic_value("dispatch_mode", 2)
+        self.coordinator.set_optimistic_value("dispatch_unlimited_charge", False)
+        await self.coordinator.async_request_refresh()
+
+    async def _start_force_charge_unlimited(self):
+        """Start force charging with automatic SOC limit (100%) and timer renewal."""
+        # Stop dynamic export if running
+        if hasattr(self.coordinator, 'dynamic_export_manager'):
+            await self.coordinator.dynamic_export_manager.stop()
+        
+        power = safe_get_entity_float(
+            self._hass,
+            f"number.neovolt_{self._device_name}_dispatch_power",
+            3.0
+        )
+
+        power_watts = int(power * 1000)
+        soc_value = 250  # Force to 100% (max register value)
+
+        values = [
+            1,                                      # Para1: Dispatch start
+            0,                                      # Para2 high byte
+            MODBUS_OFFSET - power_watts,            # Para2 low: CHARGE = 32000 - watts
+            0,                                      # Para3 high byte
+            0,                                      # Para3 low: Reactive power = 0
+            DISPATCH_MODE_POWER_WITH_SOC,           # Para4: Mode 2 (SOC control)
+            soc_value,                              # Para5: SOC target = 100%
+            0,                                      # Para6 high byte
+            UNLIMITED_CHARGE_TIMER_DURATION,        # Para6 low: 1 hour timeout
+            255,                                    # Para7: Energy routing (default)
+            0,                                      # Para8: PV switch (auto)
+        ]
+
+        _LOGGER.info(
+            f"Starting unlimited force charging: {power}kW (auto-renewal enabled)"
+        )
+
+        await self._hass.async_add_executor_job(
+            self._client.write_registers, 0x0880, values
+        )
+        
+        # Mark as unlimited charge mode for auto-renewal
+        self.coordinator.set_optimistic_value("dispatch_start", 1)
+        self.coordinator.set_optimistic_value("dispatch_power", -power_watts)
+        self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_UNLIMITED_CHARGE)
+        self.coordinator.set_optimistic_value("dispatch_unlimited_charge", True)
         await self.coordinator.async_request_refresh()
 
     async def _start_force_discharge(self):
@@ -375,6 +430,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_power", power_watts)
         self.coordinator.set_optimistic_value("dispatch_mode", 2)
+        self.coordinator.set_optimistic_value("dispatch_unlimited_charge", False)
         await self.coordinator.async_request_refresh()
 
     async def _start_dynamic_export(self):
@@ -400,6 +456,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         # Set optimistic values for UI
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_EXPORT)
+        self.coordinator.set_optimistic_value("dispatch_unlimited_charge", False)
         await self.coordinator.async_request_refresh()
 
     async def _start_no_battery_charge(self):
@@ -436,6 +493,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_power", 0)
         self.coordinator.set_optimistic_value("dispatch_mode", 19)
+        self.coordinator.set_optimistic_value("dispatch_unlimited_charge", False)
         await self.coordinator.async_request_refresh()
 
 

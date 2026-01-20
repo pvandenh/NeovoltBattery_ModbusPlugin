@@ -106,6 +106,7 @@
         "state": {
           "normal": "Normal (Automatic)",
           "force_charge": "Force Charge",
+          "force_charge_unlimited": "Force Charge (No SOC Limit)",
           "force_discharge": "Force Discharge",
           "dynamic_export": "Dynamic Export",
           "no_battery_charge": "No Battery Charge"
@@ -116,6 +117,9 @@
           },
           "force_charge": {
             "description": "Force battery to charge at specified power until target SOC reached"
+          },
+          "force_charge_unlimited": {
+            "description": "Force battery to charge at specified power without SOC limit. Timer automatically renews every hour. Perfect for multi-inverter setups where you want to charge past master's 100% SOC."
           },
           "force_discharge": {
             "description": "Force battery to discharge at specified power until cutoff SOC reached"
