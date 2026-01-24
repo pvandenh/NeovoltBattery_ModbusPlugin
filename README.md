@@ -6,7 +6,7 @@ A Home Assistant custom integration for Neovolt/Bytewatt inverters and battery s
 
 
 
-# *** Import update for updating to version 2.0.0
+# *** Important info for updating to version 2.0.0
 Note: This update changes the available controls for charging/discharging, so any existing related custom automations will need to be checked and updated accordingly. If you wish to retain the previous settings temporarily, it is best to remain on version 1.0.8, but note there will be no further development on the old version.
 
 
