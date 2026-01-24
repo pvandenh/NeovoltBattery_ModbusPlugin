@@ -32,13 +32,15 @@ DYNAMIC_EXPORT_UPDATE_INTERVAL = 10  # seconds between power adjustments
 DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD = 0.3  # kW - only update if change > this
 
 # SOC (State of Charge) conversion constants
-# The inverter stores SOC as a value from 0-255, where 255 = 100%
-# Conversion factor: SOC% / 0.392157 = register value (0-255)
-SOC_CONVERSION_FACTOR = 0.392157
+# FIXED: According to Modbus protocol, dispatch SOC uses full 8-bit range (0-255)
+# Reading battery SOC uses 0.1 multiplier (register 0x0102), but dispatch Para5 uses 0-255 range
+# Conversion: SOC% × 2.55 = register value (0-255)
+# Examples: 0% = 0, 50% = 127.5 ≈ 128, 100% = 255
+SOC_CONVERSION_FACTOR = 2.55  # Multiplier to convert percentage to register value
 MIN_SOC_PERCENT = 0.0
 MAX_SOC_PERCENT = 100.0
 MIN_SOC_REGISTER = 0
-MAX_SOC_REGISTER = 255
+MAX_SOC_REGISTER = 255  # FIXED: Was 250, now 255 for full range
 
 # Modbus dispatch command constants
 # Power values are offset by 32000 in the dispatch protocol

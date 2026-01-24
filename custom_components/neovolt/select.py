@@ -18,6 +18,8 @@ from .const import (
     MAX_SOC_PERCENT,
     MIN_SOC_PERCENT,
     MIN_SOC_REGISTER,
+    MAX_SOC_REGISTER,
+    SOC_CONVERSION_FACTOR,
     MODBUS_OFFSET,
 )
 
@@ -64,16 +66,25 @@ def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -
 
 def soc_percent_to_register(soc_percent: float) -> int:
     """
-    Convert SOC percentage (0-100%) to register value (0-250) with bounds checking.
+    Convert SOC percentage (0-100%) to register value (0-255) with bounds checking.
 
-    Uses the formula: register_value = soc_percent * 2.5
-    (0% -> 0, 40% -> 100, 100% -> 250)
+    FIXED: Uses correct conversion factor and full 0-255 range.
+    
+    According to Modbus protocol:
+    - Battery SOC reading (0x0102): uses 0.1 multiplier (value × 0.1 = %)
+    - Dispatch SOC target (Para5): uses full 8-bit range (0-255)
+    
+    Conversion formula: register_value = soc_percent × 2.55
+    Examples:
+    - 0% → 0
+    - 50% → 127.5 ≈ 128  
+    - 100% → 255
 
     Args:
         soc_percent: State of charge as percentage (0-100)
 
     Returns:
-        Register value (0-250)
+        Register value (0-255)
 
     Raises:
         ValueError: If SOC percentage is out of valid range
@@ -84,11 +95,12 @@ def soc_percent_to_register(soc_percent: float) -> int:
             f"({MIN_SOC_PERCENT}-{MAX_SOC_PERCENT}%)"
         )
 
-    # Convert to register value using * 2.5 formula (0-100% -> 0-250)
-    register_value = int(soc_percent * 2.5)
+    # FIXED: Convert to register value using × 2.55 formula (0-100% → 0-255)
+    # This ensures 100% = 255 exactly, not 250
+    register_value = round(soc_percent * SOC_CONVERSION_FACTOR)
 
-    # Clamp to valid register range as safety measure (max 250, not 255)
-    register_value = max(MIN_SOC_REGISTER, min(250, register_value))
+    # Clamp to valid register range as safety measure (0-255)
+    register_value = max(MIN_SOC_REGISTER, min(MAX_SOC_REGISTER, register_value))
 
     return register_value
 
@@ -307,7 +319,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             0,                              # Para3 high byte
             0,                              # Para3 low: Reactive power = 0
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
-            soc_value,                      # Para5: SOC target
+            soc_value,                      # Para5: SOC target (0-255 range)
             0,                              # Para6 high byte
             duration * 60,                  # Para6 low: Time (seconds)
             255,                            # Para7: Energy routing (default)
@@ -315,7 +327,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         ]
 
         _LOGGER.info(
-            f"Starting force charging: {power}kW, target SOC {soc_target}%, timeout {duration}min"
+            f"Starting force charging: {power}kW, target SOC {soc_target}% "
+            f"(register value: {soc_value}), timeout {duration}min"
         )
 
         await self._hass.async_add_executor_job(
@@ -358,7 +371,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             0,                              # Para3 high byte
             0,                              # Para3 low: Reactive power = 0
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
-            soc_value,                      # Para5: SOC cutoff
+            soc_value,                      # Para5: SOC cutoff (0-255 range)
             0,                              # Para6 high byte
             duration * 60,                  # Para6 low: Time (seconds)
             255,                            # Para7: Energy routing (default)
@@ -366,7 +379,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         ]
 
         _LOGGER.info(
-            f"Starting force discharging: {power}kW, cutoff SOC {soc_cutoff}%, timeout {duration}min"
+            f"Starting force discharging: {power}kW, cutoff SOC {soc_cutoff}% "
+            f"(register value: {soc_value}), timeout {duration}min"
         )
 
         await self._hass.async_add_executor_job(

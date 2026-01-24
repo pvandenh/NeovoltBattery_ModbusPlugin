@@ -21,6 +21,9 @@ from .const import (
     DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD,
     DYNAMIC_EXPORT_UPDATE_INTERVAL,
     MODBUS_OFFSET,
+    SOC_CONVERSION_FACTOR,
+    MAX_SOC_REGISTER,
+    MIN_SOC_REGISTER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,9 +59,15 @@ def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -
 
 
 def soc_percent_to_register(soc_percent: float) -> int:
-    """Convert SOC percentage (0-100%) to register value (0-250)."""
-    register_value = int(soc_percent * 2.5)
-    return max(0, min(250, register_value))
+    """
+    Convert SOC percentage (0-100%) to register value (0-255).
+    
+    FIXED: Uses correct conversion factor and full 0-255 range.
+    Formula: register_value = soc_percent × 2.55
+    Examples: 0% = 0, 50% = 128, 100% = 255
+    """
+    register_value = round(soc_percent * SOC_CONVERSION_FACTOR)
+    return max(MIN_SOC_REGISTER, min(MAX_SOC_REGISTER, register_value))
 
 
 class DynamicExportManager:
@@ -337,7 +346,7 @@ class DynamicExportManager:
             0,                              # Para3 high byte
             0,                              # Para3 low: Reactive power = 0
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
-            soc_value,                      # Para5: SOC cutoff
+            soc_value,                      # Para5: SOC cutoff (0-255 range)
             0,                              # Para6 high byte
             min(timeout_seconds, 65535),    # Para6 low: Time (seconds)
             255,                            # Para7: Energy routing (default)
@@ -378,7 +387,7 @@ class DynamicExportManager:
             0,                              # Para3 high byte
             0,                              # Para3 low: Reactive power = 0
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
-            soc_value,                      # Para5: SOC target
+            soc_value,                      # Para5: SOC target (0-255 range)
             0,                              # Para6 high byte
             min(timeout_seconds, 65535),    # Para6 low: Time (seconds)
             255,                            # Para7: Energy routing (default)
