@@ -25,14 +25,22 @@ DEFAULT_MAX_DISCHARGE_POWER = 5.0
 MIN_POWER = 0.5
 MAX_POWER_LIMIT = 100.0  # 100kW max for safety (supports parallel systems)
 
+# Dynamic Export mode configuration
+CONF_DYNAMIC_EXPORT_TARGET = "dynamic_export_target"
+DEFAULT_DYNAMIC_EXPORT_TARGET = 1.0  # 1kW above load by default
+DYNAMIC_EXPORT_UPDATE_INTERVAL = 10  # seconds between power adjustments
+DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD = 0.3  # kW - only update if change > this
+
 # SOC (State of Charge) conversion constants
-# The inverter stores SOC as a value from 0-255, where 255 = 100%
-# Conversion factor: SOC% / 0.392157 = register value (0-255)
-SOC_CONVERSION_FACTOR = 0.392157
+# FIXED: According to Modbus protocol, dispatch SOC uses full 8-bit range (0-255)
+# Reading battery SOC uses 0.1 multiplier (register 0x0102), but dispatch Para5 uses 0-255 range
+# Conversion: SOC% × 2.55 = register value (0-255)
+# Examples: 0% = 0, 50% = 127.5 ≈ 128, 100% = 255
+SOC_CONVERSION_FACTOR = 2.55  # Multiplier to convert percentage to register value
 MIN_SOC_PERCENT = 0.0
 MAX_SOC_PERCENT = 100.0
 MIN_SOC_REGISTER = 0
-MAX_SOC_REGISTER = 255
+MAX_SOC_REGISTER = 255  # FIXED: Was 250, now 255 for full range
 
 # Modbus dispatch command constants
 # Power values are offset by 32000 in the dispatch protocol
@@ -42,15 +50,16 @@ MODBUS_OFFSET = 32000
 # Dispatch control modes
 DISPATCH_MODE_POWER_ONLY = 0  # Control by power only
 DISPATCH_MODE_POWER_WITH_SOC = 2  # Control by power with SOC limit
+DISPATCH_MODE_DYNAMIC_EXPORT = 99  # Custom mode for dynamic export (internal only)
 
 # Dispatch command duration default (seconds)
 # Used when resetting dispatch - maintains previous command for 90 seconds
 DISPATCH_DURATION_DEFAULT = 90
 
-# Dispatch reset command
-# Format: [mode, reserved, charge_power, reserved, discharge_power, soc_mode, soc_value, reserved, duration]
+# Dispatch reset command (11 registers: Para1-Para8)
+# Format: [Para1, Para2_hi, Para2_lo, Para3_hi, Para3_lo, Para4, Para5, Para6_hi, Para6_lo, Para7, Para8]
 # This command resets to idle state with 90s timeout
-DISPATCH_RESET_VALUES = [0, 0, MODBUS_OFFSET, 0, MODBUS_OFFSET, 0, 0, 0, DISPATCH_DURATION_DEFAULT]
+DISPATCH_RESET_VALUES = [0, 0, MODBUS_OFFSET, 0, MODBUS_OFFSET, 0, 0, 0, DISPATCH_DURATION_DEFAULT, 255, 0]
 
 # Polling configuration
 CONF_MIN_POLL_INTERVAL = "min_poll_interval"
@@ -95,5 +104,5 @@ REGISTER_BLOCKS = {
     "inverter": RegisterBlock("inverter", 0x0500, 110),
     "pv_inverter_energy": RegisterBlock("pv_inverter_energy", 0x08D0, 2),
     "settings": RegisterBlock("settings", 0x0800, 86),
-    "dispatch": RegisterBlock("dispatch", 0x0880, 9),
+    "dispatch": RegisterBlock("dispatch", 0x0880, 11),  # Para1-Para8 (11 registers)
 }

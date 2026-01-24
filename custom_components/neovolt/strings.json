@@ -98,5 +98,42 @@
         }
       }
     }
+  },
+  "entity": {
+    "select": {
+      "dispatch_mode": {
+        "name": "Dispatch Mode",
+        "state": {
+          "normal": "Normal (Automatic)",
+          "force_charge": "Force Charge",
+          "force_discharge": "Force Discharge",
+          "dynamic_export": "Dynamic Export",
+          "no_battery_charge": "No Battery Charge"
+        },
+        "state_attributes": {
+          "normal": {
+            "description": "Battery operates automatically based on system configuration"
+          },
+          "force_charge": {
+            "description": "Force battery to charge at specified power until target SOC reached"
+          },
+          "force_discharge": {
+            "description": "Force battery to discharge at specified power until cutoff SOC reached"
+          },
+          "dynamic_export": {
+            "description": "Automatically discharge to maintain load + target export power. Continuously adjusts every 10 seconds with 0.3kW debounce threshold."
+          },
+          "no_battery_charge": {
+            "description": "Prevent all battery charging (from solar and grid)"
+          }
+        }
+      }
+    },
+    "number": {
+      "dynamic_export_target": {
+        "name": "Dynamic Export Target",
+        "description": "Additional power to export beyond house load (in kW). Dynamic Export mode will discharge at: Load + This Value. Updates every 10 seconds with 0.3kW debounce threshold."
+      }
+    }
   }
 }

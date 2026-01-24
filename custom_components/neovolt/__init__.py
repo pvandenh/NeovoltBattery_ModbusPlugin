@@ -34,10 +34,9 @@ from .coordinator import NeovoltDataUpdateCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
-    Platform.SENSOR, 
-    Platform.SWITCH, 
-    Platform.NUMBER, 
-    Platform.SELECT, 
+    Platform.SENSOR,
+    Platform.NUMBER,
+    Platform.SELECT,
     Platform.BUTTON
 ]
 
@@ -116,6 +115,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         # Close Modbus connection before cleanup (with safety check)
         if entry.entry_id in hass.data.get(DOMAIN, {}):
+            # Stop dynamic export manager if running
+            coordinator = hass.data[DOMAIN][entry.entry_id].get("coordinator")
+            if coordinator and hasattr(coordinator, 'dynamic_export_manager'):
+                try:
+                    await coordinator.dynamic_export_manager.stop()
+                    _LOGGER.info("Stopped Dynamic Export manager during unload")
+                except Exception as e:
+                    _LOGGER.debug(f"Error stopping Dynamic Export manager (ignored): {e}")
+            
+            # Close Modbus connection
             client = hass.data[DOMAIN][entry.entry_id].get("client")
             if client:
                 await hass.async_add_executor_job(client.close)
