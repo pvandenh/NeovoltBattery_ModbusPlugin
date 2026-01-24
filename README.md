@@ -135,59 +135,35 @@ You'll need to enter these details:
 | **Host (IP Address)** | IP address of your inverter or EW11A | **Direct**: `192.168.2.125`<br>**EW11A**: `192.168.1.100` |
 | **Port** | Leave as default | `502` |
 | **Slave ID** | Leave as default | `85` |
+| **Device Name** | Optional friendly name | Leave empty for auto-numbering |
+| **Device Role** | Host or Follower | **Host** (full control)<br>**Follower** (read-only) |
+
+### Step 5: Configure Power Limits (Host Devices Only)
+
+| Setting | What to Enter | Example |
+|---------|---------------|---------|
 | **Max Charge Power** | Maximum charging power in kW | `5.0` (single inverter)<br>`15.0` (three inverters) |
 | **Max Discharge Power** | Maximum discharging power in kW | `5.0` (single inverter)<br>`15.0` (three inverters) |
-
-**Finding Your IP Address:**
-
-- **Direct Ethernet**: Check your router's device list for "Neovolt" or "Bytewatt"
-- **EW11A**: Check router for "EW11A" or check the EW11A's display screen
-- **Alternative**: Use a network scanner app on your phone
 
 **Multiple Inverters?**
 If you have a parallel/master-slave setup, enter the **total combined capacity**. For example, three 5kW inverters = 15kW total.
 
-### Step 5: Done! 🎉
+### Step 6: Configure Polling & Recovery (Optional)
 
-Your integration is now set up! You'll see a new device called "Neovolt Inverter" with all your sensors and controls.
+Advanced settings for adaptive polling and auto-recovery:
 
----
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Min Poll Interval** | 10 seconds | Fastest polling for changing values |
+| **Max Poll Interval** | 300 seconds | Slowest polling for stable values |
+| **Recovery: Consecutive Failures** | 5 | Auto-reconnect after this many failures |
+| **Recovery: Data Staleness** | 10 minutes | Auto-reconnect if no data changes |
 
-## 🔌 Connection Troubleshooting
+**Most users can leave these at default values.**
 
-### Direct Ethernet Connection Issues
+### Step 7: Done! 🎉
 
-**Can't find inverter IP address:**
-1. ✅ Check router's connected devices list
-2. ✅ Look for device with MAC address starting with common inverter prefixes
-3. ✅ Try scanning network with tools like "Fing" mobile app
-4. ✅ Check inverter's display screen (may show IP)
-
-**Connection refused on port 502:**
-1. ✅ Verify Modbus TCP is enabled on inverter
-2. ✅ Check firewall settings on network
-3. ✅ Ensure port 502 isn't blocked by router
-
-**Intermittent connection:**
-1. ✅ Assign static IP to inverter in router
-2. ✅ Check Ethernet cable quality
-3. ✅ Verify network switch/router is working properly
-
-### EW11A WiFi Adapter Issues
-
-**Can't connect to EW11A network:**
-1. ✅ Make sure EW11A is powered
-2. ✅ Wait 30 seconds after power-on for WiFi to activate
-3. ✅ Look for network name starting with "EW11"
-4. ✅ Try factory reset if needed
-
-**EW11A not appearing on home network:**
-1. ✅ Verify WiFi credentials were entered correctly
-2. ✅ Check WiFi mode is set to "STA" (Station mode)
-3. ✅ Restart EW11A by unplugging and replugging
-4. ✅ Check router's connected devices list
-
-**For detailed EW11A setup:** See the [complete hardware setup guide](https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/custom_components/neovolt/Neovolt_Modbus%20initial%20hardware%20setup.docx)
+Your integration is now set up! You'll see a new device called "Neovolt [device_name]" with all your sensors and controls.
 
 ---
 
@@ -207,8 +183,9 @@ Your integration is now set up! You'll see a new device called "Neovolt Inverter
 - ☀️ PV voltage per string (PV1, PV2, PV3)
 - 🔆 PV current per string
 - ⚡ PV power per string
-- 📊 Total PV power
+- 📊 Total PV power (DC + AC combined)
 - 📈 Total PV energy produced
+- 📅 Daily PV energy (resets at midnight)
 
 **Battery Status**
 - 🔋 Battery voltage
@@ -229,33 +206,54 @@ Your integration is now set up! You'll see a new device called "Neovolt Inverter
 - 📊 Energy input/output totals
 
 **Calculated Values**
-- 🏠 House load (automatically calculated)
+- 🏠 House load (automatically calculated from PV + Battery + Grid)
 - ☀️ Current solar production
+- 📊 Excess grid export (for multi-inverter setups)
 
-### 🎛️ Controls
+### 🎛️ Battery Control
 
-**Battery Control Switches**
-- 🔋 **Force Charging** - Charge battery from grid
-- 🔌 **Force Discharging** - Discharge battery to grid/house
-- 🚫 **Prevent Solar Charging** - Stop battery charging from solar
+**Dispatch Mode Select** (Single Control Point)
+- 🔄 **Normal** - Automatic battery operation
+- 🔋 **Force Charge** - Charge battery from grid at specified power/SOC
+- 🔌 **Force Discharge** - Discharge battery at specified power/SOC
+- 📊 **Dynamic Export** - Maintain target grid export power automatically
+- 🚫 **No Battery Charge** - Prevent all battery charging (solar & grid)
 
-**Power Settings (Sliders)**
-- ⚡ **Force Charging Power** - How fast to charge (0.5 - configured max kW)
-- ⏱️ **Force Charging Duration** - How long to charge (1-480 minutes)
-- 🎯 **Charging SOC Target** - Stop charging at this % (10-100%)
-- ⚡ **Force Discharging Power** - How fast to discharge (0.5 - configured max kW)
-- ⏱️ **Force Discharging Duration** - How long to discharge (1-480 minutes)
-- 🎯 **Discharging SOC Cutoff** - Stop discharging at this % (4-50%)
-- ⏱️ **Prevent Solar Charging Duration** - How long to block solar charging (1-1440 minutes)
+**Dispatch Configuration (Number Entities)**
+- ⚡ **Dispatch Power** - Charge/discharge power (0.5 - max kW)
+- ⏱️ **Dispatch Duration** - How long to run (1-480 minutes)
+- 🎯 **Dispatch Charge Target SOC** - Stop charging at % (10-100%)
+- 🎯 **Dispatch Discharge Cutoff SOC** - Stop discharging at % (4-100%)
+- 📊 **Dynamic Export Target** - Extra power to export beyond load (kW)
+
+**Additional Controls**
+- 🔆 **PV Switch** - Control PV input (Auto/Open/Close)
+- 🛑 **Stop Force Charge/Discharge** - Quick stop button
 
 **System Settings**
 - 🌐 **Max Feed to Grid** - Limit grid export (0-100%)
+- 📦 **PV Capacity** - Total PV installation capacity (Watts)
 - 🔋 **Charging Cutoff SOC** - Maximum battery charge level (10-100%)
-- 🔋 **Discharging Cutoff SOC** - Minimum battery discharge level (4-100%)
+- 🔋 **Discharging Cutoff SOC (Default)** - Minimum battery discharge level (4-100%)
 - ⏰ **Time Period Control** - Enable time-based charging/discharging schedules
 
-**Quick Actions (Buttons)**
-- 🛑 **Stop Force Charge/Discharge** - Quickly stop all force charging / discharging commands
+### 🆕 What's New in Latest Version
+
+**🔄 Improved Reliability**
+- Adaptive polling automatically adjusts update frequency
+- Auto-recovery from connection issues
+- Better handling of temporary network hiccups
+- Cached data keeps sensors available during brief disconnections
+
+**🎯 Dynamic Export Mode**
+- Automatically maintain target grid export power
+- Adjusts battery charge/discharge every 10 seconds
+- Perfect for maximizing solar feed-in tariff earnings
+
+**📊 Multi-Device Support**
+- Host/Follower device roles
+- Configure multiple inverters independently
+- Follower devices provide read-only monitoring
 
 ---
 
@@ -269,42 +267,68 @@ To update maximum charge/discharge power after installation:
 2. Find **Neovolt Inverter**
 3. Click the **three dots** (⋮)
 4. Click **Configure**
-5. Update your power limits
-6. Click **Submit**
+5. Update your settings:
+   - Device role (Host/Follower)
+   - Power limits (Host only)
+   - Polling configuration
+6. Click through the configuration steps
+7. Click **Submit**
 
 The integration will reload with your new settings!
 
+### Understanding Device Roles
+
+**Host Device:**
+- Full read/write control
+- Can change settings and dispatch modes
+- Use for primary control point
+
+**Follower Device:**
+- Read-only sensor access
+- No control entities created
+- Perfect for parallel inverter monitoring
+- Lighter resource usage
+
 ---
 
-## 🎨 Dashboard Card Example
+## 🔌 Connection Troubleshooting
 
-Create a simple dashboard card to monitor your system:
+### Direct Ethernet Connection Issues
 
-```yaml
-type: entities
-title: Neovolt Solar System
-entities:
-  - entity: sensor.neovolt_inverter_battery_soc
-    name: Battery Level
-    icon: mdi:battery
-  - entity: sensor.neovolt_inverter_battery_power
-    name: Battery Power
-  - entity: sensor.neovolt_inverter_current_pv_production
-    name: Solar Production
-  - entity: sensor.neovolt_inverter_grid_total_active_power
-    name: Grid Power
-  - entity: sensor.neovolt_inverter_total_house_load
-    name: House Load
-  - type: divider
-  - entity: switch.neovolt_inverter_force_charging
-    name: Force Charge
-  - entity: switch.neovolt_inverter_force_discharging
-    name: Force Discharge
-  - entity: number.neovolt_inverter_force_charging_power
-    name: Charge Power
-  - entity: number.neovolt_inverter_force_discharging_power
-    name: Discharge Power
-```
+**Can't find inverter IP address:**
+1. ✅ Check router's connected devices list
+2. ✅ Look for device with MAC address starting with common inverter prefixes
+3. ✅ Try scanning network with tools like "Fing" mobile app
+4. ✅ Check inverter's display screen (may show IP)
+
+**Connection refused on port 502:**
+1. ✅ Verify Modbus TCP is enabled on inverter
+2. ✅ Check firewall settings on network
+3. ✅ Ensure port 502 isn't blocked by router
+4. ✅ Try telnet test: `telnet [IP] 502`
+
+**Intermittent connection:**
+1. ✅ Assign static IP to inverter in router
+2. ✅ Check Ethernet cable quality
+3. ✅ Verify network switch/router is working properly
+4. ✅ Review integration logs for patterns
+
+### EW11A WiFi Adapter Issues
+
+**Can't connect to EW11A network:**
+1. ✅ Make sure EW11A is powered
+2. ✅ Wait 30 seconds after power-on for WiFi to activate
+3. ✅ Look for network name starting with "EW11"
+4. ✅ Try factory reset if needed
+
+**EW11A not appearing on home network:**
+1. ✅ Verify WiFi credentials were entered correctly
+2. ✅ Check WiFi mode is set to "STA" (Station mode)
+3. ✅ Restart EW11A by unplugging and replugging
+4. ✅ Check router's connected devices list
+5. ✅ Ensure TCP Server mode is enabled on port 502
+
+**For detailed EW11A setup:** See the [complete hardware setup guide](https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/blob/main/custom_components/neovolt/Neovolt_Modbus%20initial%20hardware%20setup.docx)
 
 ---
 
@@ -319,10 +343,11 @@ entities:
 **For Direct Ethernet Connection:**
 1. ✅ Verify inverter is powered on
 2. ✅ Check IP address is correct (look in router's device list)
-3. ✅ Ping the IP address from Home Assistant Terminal
+3. ✅ Ping the IP address from Home Assistant Terminal: `ping [IP]`
 4. ✅ Check Ethernet cable is securely connected
 5. ✅ Verify Modbus TCP is enabled on inverter (should be by default)
 6. ✅ Try rebooting the inverter
+7. ✅ Check Home Assistant logs for detailed error messages
 
 **For EW11A Connection:**
 1. ✅ Check EW11A is powered on and connected to network
@@ -330,7 +355,8 @@ entities:
 3. ✅ Ping the IP address from Home Assistant Terminal
 4. ✅ Check port 502 is open (firewall)
 5. ✅ Ensure EW11A is in TCP Server mode
-6. ✅ Try rebooting the EW11A converter
+6. ✅ Verify serial settings (9600 baud, Modbus protocol)
+7. ✅ Try rebooting the EW11A converter
 
 ### Sensors Show "Unavailable"
 
@@ -340,30 +366,65 @@ entities:
 1. ✅ Check Slave ID is correct (default: 85)
 2. ✅ Verify physical connection to inverter (Ethernet or RS485)
 3. ✅ Check inverter is powered on and operational
-4. ✅ Reload integration: Settings → Devices & Services → Neovolt → ⋮ → Reload
-5. ✅ Check logs: Settings → System → Logs (search for "neovolt")
+4. ✅ Wait a few minutes for initial polling to complete
+5. ✅ Reload integration: Settings → Devices & Services → Neovolt → ⋮ → Reload
+6. ✅ Check logs: Settings → System → Logs (search for "neovolt")
+7. ✅ Try increasing min poll interval if seeing connection errors
 
 ### Force Charge/Discharge Not Working
 
-**Problem**: Switch turns on but nothing happens
+**Problem**: Dispatch mode changes but nothing happens
 
 **Solutions**:
 1. ✅ Check battery SOC is within allowed range
 2. ✅ Verify inverter is in correct mode (not in maintenance, etc.)
-3. ✅ Ensure grid connection is available (for charging)
+3. ✅ Ensure grid connection is available (for charging from grid)
 4. ✅ Check battery isn't in protection mode
-5. ✅ Try pressing the "Dispatch Reset" button first
+5. ✅ Verify power setting is above minimum (0.5kW)
+6. ✅ Check dispatch status sensor for error messages
+7. ✅ Try "Stop Force Charge/Discharge" button first
+8. ✅ Review logs for Modbus write errors
 
-### Power Sliders Limited to 5kW
+### Battery Not Reaching 100% SOC
+
+**Problem**: Force charge stops at 99.5% or 98%
+
+**This is FIXED in the latest version!**
+
+**Solutions**:
+1. ✅ Update to the latest integration version (includes SOC fix)
+2. ✅ Verify charge target SOC is set to 100%
+3. ✅ If you were using workarounds (e.g., 102% target), reset to 100%
+4. ✅ Check battery isn't hitting other limits (voltage, temperature)
+
+### Power Sliders Limited
 
 **Problem**: Can't set higher power even with multiple inverters
 
 **Solutions**:
 1. ✅ Go to Settings → Devices & Services → Neovolt → ⋮ → Configure
-2. ✅ Update Max Charge Power and Max Discharge Power
-3. ✅ Enter total combined capacity (e.g., 15 for three 5kW units)
-4. ✅ Click Submit
-5. ✅ Integration will reload with new limits
+2. ✅ Go through Device Role → Power Limits steps
+3. ✅ Update Max Charge Power and Max Discharge Power
+4. ✅ Enter total combined capacity (e.g., 15 for three 5kW units)
+5. ✅ Click Submit through all steps
+6. ✅ Integration will reload with new limits
+
+### Data Age / Stale Data Warnings
+
+**Problem**: Sensors show "data_stale" attribute as true
+
+**What this means:**
+- Integration is using cached data
+- Connection may be intermittent
+- Auto-recovery will attempt reconnection
+
+**Solutions**:
+1. ✅ Check network connection stability
+2. ✅ Review logs for connection errors
+3. ✅ Consider increasing min poll interval
+4. ✅ Verify Modbus gateway isn't overloaded
+5. ✅ Sensors will auto-recover when connection restored
+6. ✅ Data older than 12 hours will mark entities unavailable
 
 ---
 
@@ -386,19 +447,28 @@ logger:
 4. Check logs: Settings → System → Logs
 5. Search for "neovolt" to see all integration activity
 
+**What to look for in logs:**
+- Connection attempts and success/failure
+- Modbus register reads and writes
+- Adaptive polling interval changes
+- Auto-recovery triggers
+- Data age tracking
+
+
 ---
 
 ## 📱 Getting Help
 
 If you're stuck:
 
-1. **Check the logs first**: Settings → System → Logs
+1. **Check the logs first**: Settings → System → Logs (search for "neovolt")
 2. **Search existing issues**: https://github.com/pvandenh/NeovoltBattery_ModbusPlugin/issues
 3. **Create a new issue** with:
    - Home Assistant version
-   - Integration version
+   - Integration version (check HACS)
    - Connection type (Direct Ethernet or EW11A)
-   - Error messages from logs
+   - Device role configuration (Host/Follower)
+   - Error messages from logs (enable debug logging)
    - What you've tried
    - Screenshots (if helpful)
 
@@ -406,9 +476,71 @@ If you're stuck:
 
 ---
 
-## 🌟 Features Roadmap
+## 🔧 Advanced Configuration
+
+### Multiple Inverter Setup (Parallel/Master-Slave)
+
+**Recommended Configuration:**
+
+1. **Master/Host Inverter:**
+   - Device Role: **Host**
+   - Full control capabilities
+   - Configure with total system capacity
+
+2. **Slave/Follower Inverters:**
+   - Device Role: **Follower**
+   - Read-only monitoring
+   - Lighter resource usage
+
+**Example: Three 5kW Inverters in Parallel**
+
+Host Device (Master):
+- Max Charge Power: 15 kW
+- Max Discharge Power: 15 kW
+- All control entities available
+
+Follower Devices (Slaves):
+- Sensor entities only
+- Monitor individual inverter performance
+- No control entities
+
+### Optimizing Polling Performance
+
+The integration uses adaptive polling that automatically adjusts based on data changes:
+
+**Default Behavior:**
+- Fast polling (10s) for actively changing values
+- Slow polling (300s) for stable values
+- Auto-recovery on connection issues
+
+**Tuning for Your Setup:**
+
+**Slower, More Stable Networks:**
+```
+Min Poll Interval: 15 seconds
+Max Poll Interval: 600 seconds
+Consecutive Failures: 10
+Staleness Threshold: 20 minutes
+```
+
+**Faster, Reliable Networks:**
+```
+Min Poll Interval: 10 seconds (minimum allowed)
+Max Poll Interval: 120 seconds
+Consecutive Failures: 3
+Staleness Threshold: 5 minutes
+```
+
+---
+
+## 🌟 Contributing
 
 Want to contribute? Pull requests welcome!
+
+**Areas for Contribution:**
+- Bug fixes
+- Feature enhancements
+- Documentation improvements
 
 ---
 
@@ -421,29 +553,30 @@ MIT License - Feel free to use, modify, and share!
 ## 👍 Credits
 
 - Based on Bytewatt Modbus RTU Protocol V1.12
-- Integration developed for the Home Assistant community, assisted by Claude.ai
+- Integration developed for the Home Assistant community
+- Special thanks to Claude.ai for development assistance
 - Thanks to all contributors and testers!
 
 ---
 
-## ⚡ Quick Start Checklist
+## 📋 Version History
 
-- [ ] HACS installed
-- [ ] Custom repository added to HACS
-- [ ] Integration installed via HACS
-- [ ] Home Assistant restarted
-- [ ] **Connection hardware setup** (Direct Ethernet OR EW11A)
-- [ ] IP address of inverter/EW11A noted
-- [ ] Integration added via Settings → Devices & Services
-- [ ] Connection details entered correctly
-- [ ] Max power configured (if multiple inverters)
-- [ ] Integration showing data
-- [ ] Added to Energy Dashboard
-- [ ] Created first automation
-- [ ] Created dashboard card
+### Latest Release
+- ✅ **Fixed critical SOC conversion bug** - battery now correctly reaches 100%
+- 🔄 Adaptive polling for improved reliability
+- 🎯 Dynamic Export mode for grid export control
+- 📊 Multi-device support with Host/Follower roles
+- 🛡️ Auto-recovery from connection issues
+- 📈 Better handling of unavailable sensors
+- 🔧 Configurable polling intervals
+
+### Previous Versions
+- See GitHub releases for detailed changelog
+
+---
 
 **You're all set! ☀️🔋**
 
 ---
 
-*For technical documentation and advanced features, see the full documentation on GitHub.*
+*For technical documentation, Modbus protocol details, and advanced features, see the repository wiki and source code documentation.*
