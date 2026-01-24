@@ -4,7 +4,14 @@ A Home Assistant custom integration for Neovolt/Bytewatt inverters and battery s
 
 <img width="225" height="80" alt="image" src="https://github.com/user-attachments/assets/fd21d47f-ff23-44cb-bd60-02c9f13d0f06" />
 
-## 🎯 What Does This Do?
+
+
+# *** Import update for updating to version 2.0.0
+Note: This update changes the available controls for charging/discharging, so any existing related custom automations will need to be checked and updated accordingly. If you wish to retain the previous settings temporarily, it is best to remain on version 1.0.8, but note there will be no further development on the old version.
+
+
+
+## 🎯 What Does This Integration Do?
 
 This integration connects your Neovolt inverter to Home Assistant, giving you:
 - **Real-time monitoring** of your solar production, battery status, and grid usage
