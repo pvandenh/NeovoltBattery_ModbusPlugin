@@ -14,6 +14,7 @@ from .const import (
     DISPATCH_MODE_POWER_WITH_SOC,
     DISPATCH_MODE_DYNAMIC_EXPORT,
     DISPATCH_RESET_VALUES,
+    DISPATCH_COMMAND_REFRESH_INTERVAL,
     DOMAIN,
     MAX_SOC_PERCENT,
     MIN_SOC_PERCENT,
@@ -312,6 +313,10 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         power_watts = int(power * 1000)
         soc_value = soc_percent_to_register(soc_target)
 
+        # CRITICAL FIX: Use FULL user-specified duration, not shortened timeout
+        # User wants it to run for X minutes, so honor that request
+        timeout_seconds = min(duration * 60, 65535)  # Cap at max register value
+
         values = [
             1,                              # Para1: Dispatch start
             0,                              # Para2 high byte
@@ -321,14 +326,15 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
             soc_value,                      # Para5: SOC target (0-255 range)
             0,                              # Para6 high byte
-            duration * 60,                  # Para6 low: Time (seconds)
+            timeout_seconds,                # Para6 low: Time (seconds) - FULL duration
             255,                            # Para7: Energy routing (default)
             0,                              # Para8: PV switch (auto)
         ]
 
         _LOGGER.info(
             f"Starting force charging: {power}kW, target SOC {soc_target}% "
-            f"(register value: {soc_value}), timeout {duration}min"
+            f"(register value: {soc_value}), timeout {timeout_seconds}s "
+            f"(duration: {duration}min)"
         )
 
         await self._hass.async_add_executor_job(
@@ -364,6 +370,10 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         power_watts = int(power * 1000)
         soc_value = soc_percent_to_register(soc_cutoff)
 
+        # CRITICAL FIX: Use FULL user-specified duration, not shortened timeout
+        # User wants it to run for X minutes, so honor that request
+        timeout_seconds = min(duration * 60, 65535)  # Cap at max register value
+
         values = [
             1,                              # Para1: Dispatch start
             0,                              # Para2 high byte
@@ -373,14 +383,15 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
             soc_value,                      # Para5: SOC cutoff (0-255 range)
             0,                              # Para6 high byte
-            duration * 60,                  # Para6 low: Time (seconds)
+            timeout_seconds,                # Para6 low: Time (seconds) - FULL duration
             255,                            # Para7: Energy routing (default)
             0,                              # Para8: PV switch (auto)
         ]
 
         _LOGGER.info(
             f"Starting force discharging: {power}kW, cutoff SOC {soc_cutoff}% "
-            f"(register value: {soc_value}), timeout {duration}min"
+            f"(register value: {soc_value}), timeout {timeout_seconds}s "
+            f"(duration: {duration}min)"
         )
 
         await self._hass.async_add_executor_job(
