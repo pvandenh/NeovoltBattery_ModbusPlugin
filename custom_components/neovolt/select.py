@@ -14,7 +14,6 @@ from .const import (
     DISPATCH_MODE_POWER_WITH_SOC,
     DISPATCH_MODE_DYNAMIC_EXPORT,
     DISPATCH_RESET_VALUES,
-    DISPATCH_COMMAND_REFRESH_INTERVAL,
     DOMAIN,
     MAX_SOC_PERCENT,
     MIN_SOC_PERCENT,
@@ -224,34 +223,36 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def current_option(self):
-        """Detect mode from hardware state."""
+        """Detect current dispatch mode from hardware state."""
         data = self.coordinator.data
         dispatch_start = data.get("dispatch_start", 0)
-        dispatch_power = data.get("dispatch_power", 0)
         dispatch_mode = data.get("dispatch_mode", 0)
+        dispatch_power = data.get("dispatch_power", 0)
 
-        if dispatch_start != 1:
+        # Check if dispatch is active
+        if dispatch_start == 0:
             return "Normal"
 
-        # Check for Dynamic Export mode (custom mode flag)
+        # Detect dynamic export mode (internal tracking mode)
         if dispatch_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
             return "Dynamic Export"
 
-        # Check modes by mode number
+        # Mode 19: No Battery Charge
         if dispatch_mode == 19:
             return "No Battery Charge"
-        elif dispatch_mode == 2:
-            # Mode 2: State of Charge control - detect by power direction
-            # Negative = charge (32000 - watts), Positive = discharge (32000 + watts)
+
+        # Mode 2 (power + SOC): determine charge/discharge based on power sign
+        if dispatch_mode == DISPATCH_MODE_POWER_WITH_SOC:
             if dispatch_power < 0:
                 return "Force Charge"
             elif dispatch_power > 0:
                 return "Force Discharge"
 
+        # Fallback for unknown state
         return "Normal"
 
     async def async_select_option(self, option: str) -> None:
-        """Change the dispatch mode."""
+        """Handle dispatch mode selection."""
         try:
             if option == "Normal":
                 await self._stop_dispatch()
@@ -264,22 +265,18 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             elif option == "No Battery Charge":
                 await self._start_no_battery_charge()
             else:
-                _LOGGER.error(f"Unknown dispatch mode option: {option}")
+                _LOGGER.error(f"Unknown dispatch mode: {option}")
+
         except Exception as e:
-            _LOGGER.error(f"Failed to set dispatch mode to '{option}': {e}")
+            _LOGGER.error(f"Failed to set dispatch mode to '{option}': {e}", exc_info=True)
 
     async def _stop_dispatch(self):
-        """Stop all dispatch - return to automatic operation."""
-        _LOGGER.info("Stopping dispatch - returning to normal operation")
-        
-        # Stop dynamic export manager if running
+        """Stop all active dispatch modes (Normal mode)."""
+        # Stop dynamic export if running
         if hasattr(self.coordinator, 'dynamic_export_manager'):
-            try:
-                await self.coordinator.dynamic_export_manager.stop()
-                _LOGGER.info("Dynamic Export manager stopped")
-            except Exception as e:
-                _LOGGER.error(f"Error stopping Dynamic Export manager: {e}")
+            await self.coordinator.dynamic_export_manager.stop()
         
+        _LOGGER.info("Stopping dispatch, returning to Normal mode")
         await self._hass.async_add_executor_job(
             self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
         )
