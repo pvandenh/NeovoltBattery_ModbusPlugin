@@ -18,6 +18,7 @@ from .const import (
     DEFAULT_MAX_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
     DEFAULT_DYNAMIC_EXPORT_TARGET,
+    DYNAMIC_EXPORT_MAX_POWER,
     DEVICE_ROLE_FOLLOWER,
 )
 
@@ -91,12 +92,13 @@ async def async_setup_entry(
         ),
 
         # Dynamic Export Target (local storage, used by dynamic export mode)
+        # Fixed max to 15kW to support AC-coupled systems
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
             "dynamic_export_target", "Dynamic Export Target",
-            0.5, max_discharge_power, 0.1, UnitOfPower.KILO_WATT, None, False,
+            0.5, DYNAMIC_EXPORT_MAX_POWER, 0.1, UnitOfPower.KILO_WATT, None, False,
             default_value=DEFAULT_DYNAMIC_EXPORT_TARGET, icon="mdi:transmission-tower-export",
-            config_entry=entry
+            config_entry=entry, fixed_max=True
         ),
 
         # PV Capacity (32-bit register, in Watts)
@@ -133,7 +135,8 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         icon=None,
         config_entry=None,
         is_32bit=False,
-        scale=1
+        scale=1,
+        fixed_max=False
     ):
         """Initialize the number entity."""
         super().__init__(coordinator)
@@ -145,6 +148,7 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         self._config_entry = config_entry
         self._is_32bit = is_32bit
         self._scale = scale
+        self._fixed_max = fixed_max  # If True, max value is fixed and won't update from config
         self._attr_name = f"Neovolt {device_name} {name}"
         self._attr_unique_id = f"neovolt_{device_name}_{key}"
         self._attr_native_min_value = min_val
@@ -169,16 +173,17 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     @property
     def native_max_value(self) -> float:
         """Return the maximum value (dynamically from config if applicable)."""
+        # Skip dynamic max update if fixed_max is True (e.g., dynamic_export_target)
+        if self._fixed_max:
+            return self._attr_native_max_value
+        
         # Update max value from config entry for power settings
-        if self._config_entry and self._key in ["dispatch_power", "dynamic_export_target", "pv_capacity"]:
+        if self._config_entry and self._key in ["dispatch_power", "pv_capacity"]:
             if self._key == "dispatch_power":
                 # Use the higher of charge/discharge max power
                 charge_max = self._config_entry.data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
                 discharge_max = self._config_entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
                 new_max = max(charge_max, discharge_max)
-            elif self._key == "dynamic_export_target":
-                # Use max discharge power
-                new_max = self._config_entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
             else:
                 # pv_capacity is in Watts, config is in kW
                 new_max = self._config_entry.data.get(CONF_MAX_CHARGE_POWER, self._attr_native_max_value) * 1000

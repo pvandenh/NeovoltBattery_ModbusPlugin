@@ -28,26 +28,24 @@ MAX_POWER_LIMIT = 100.0  # 100kW max for safety (supports parallel systems)
 # Dynamic Export mode configuration
 CONF_DYNAMIC_EXPORT_TARGET = "dynamic_export_target"
 DEFAULT_DYNAMIC_EXPORT_TARGET = 1.0  # 1kW above load by default
+DYNAMIC_EXPORT_MAX_POWER = 15.0  # 15kW max to support extended system configurations
 DYNAMIC_EXPORT_UPDATE_INTERVAL = 10  # seconds between power adjustments
 DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD = 0.3  # kW - only update if change > this
 
-# CRITICAL: Command refresh interval for dispatch operations
-# This controls how frequently dispatch commands are re-sent to maintain state
-# Shorter = more responsive to manual changes, longer = less Modbus traffic
-DISPATCH_COMMAND_REFRESH_INTERVAL = 30  # seconds (re-send command every 30s)
-
-# CRITICAL: Command timeout must be LONGER than refresh interval to prevent gaps
-# Timeout = refresh interval + safety buffer to ensure continuous operation
-DISPATCH_COMMAND_TIMEOUT = 90  # seconds (3x refresh interval for safety)
-
 # SOC (State of Charge) conversion constants
+# FIXED: According to Modbus protocol, dispatch SOC uses full 8-bit range (0-255)
+# Reading battery SOC uses 0.1 multiplier (register 0x0102), but dispatch Para5 uses 0-255 range
+# Conversion: SOC% × 2.55 = register value (0-255)
+# Examples: 0% = 0, 50% = 127.5 ≈ 128, 100% = 255
 SOC_CONVERSION_FACTOR = 2.55  # Multiplier to convert percentage to register value
 MIN_SOC_PERCENT = 0.0
 MAX_SOC_PERCENT = 100.0
 MIN_SOC_REGISTER = 0
-MAX_SOC_REGISTER = 255  # Full 8-bit range
+MAX_SOC_REGISTER = 255  # FIXED: Was 250, now 255 for full range
 
 # Modbus dispatch command constants
+# Power values are offset by 32000 in the dispatch protocol
+# Positive offset (32000 + watts) = charge, Negative offset (32000 - watts) = discharge
 MODBUS_OFFSET = 32000
 
 # Dispatch control modes
@@ -56,10 +54,12 @@ DISPATCH_MODE_POWER_WITH_SOC = 2  # Control by power with SOC limit
 DISPATCH_MODE_DYNAMIC_EXPORT = 99  # Custom mode for dynamic export (internal only)
 
 # Dispatch command duration default (seconds)
-# IMPORTANT: Must be longer than refresh interval to maintain continuous operation
-DISPATCH_DURATION_DEFAULT = DISPATCH_COMMAND_TIMEOUT
+# Used when resetting dispatch - maintains previous command for 90 seconds
+DISPATCH_DURATION_DEFAULT = 90
 
 # Dispatch reset command (11 registers: Para1-Para8)
+# Format: [Para1, Para2_hi, Para2_lo, Para3_hi, Para3_lo, Para4, Para5, Para6_hi, Para6_lo, Para7, Para8]
+# This command resets to idle state with 90s timeout
 DISPATCH_RESET_VALUES = [0, 0, MODBUS_OFFSET, 0, MODBUS_OFFSET, 0, 0, 0, DISPATCH_DURATION_DEFAULT, 255, 0]
 
 # Polling configuration
@@ -81,6 +81,7 @@ MIN_POLL_INTERVAL_LIMIT = 10      # Cannot go below 10 seconds
 MAX_POLL_INTERVAL_LIMIT = 3600    # Cannot exceed 1 hour
 
 # Keys for storing persistent data in config entry options
+# These are runtime data that should NOT trigger integration reload
 STORAGE_LAST_RESET_DATE = "last_reset_date"
 STORAGE_MIDNIGHT_BASELINE = "pv_inverter_energy_at_midnight"
 STORAGE_LAST_KNOWN_TOTAL = "last_known_total_energy"
