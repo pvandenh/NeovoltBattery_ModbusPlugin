@@ -187,7 +187,7 @@ class DynamicExportManager:
                             f"Dynamic Export duration expired ({self._duration_minutes} minutes). "
                             "Stopping automatically."
                         )
-                        await self._stop_dispatch()
+                        await self._stop_and_reset_dispatch()
                         break
                 
                 try:
@@ -197,22 +197,23 @@ class DynamicExportManager:
                     _LOGGER.error(f"Error in Dynamic Export control loop: {e}", exc_info=True)
 
                 # Wait for next update interval
-                _LOGGER.debug(f"Dynamic Export: Sleeping for {DYNAMIC_EXPORT_UPDATE_INTERVAL}s")
                 await asyncio.sleep(DYNAMIC_EXPORT_UPDATE_INTERVAL)
-
+                
         except asyncio.CancelledError:
             _LOGGER.info("Dynamic Export control loop cancelled")
             raise
-        finally:
-            _LOGGER.info("Dynamic Export control loop ended")
+        except Exception as e:
+            _LOGGER.error(f"Unexpected error in Dynamic Export control loop: {e}", exc_info=True)
+            self._running = False
 
     async def _update_battery_power(self) -> None:
-        """Calculate and update battery power to maintain target export.
+        """
+        Calculate required battery power and send appropriate command.
         
-        Formula: Battery Power = (Target Export + House Load) - PV Production
-        
-        Positive power = discharge battery
-        Negative power = charge battery (reduced rate)
+        CORRECTED CALCULATION:
+        - To export X kW while powering house load Y kW, we need total power of (X + Y) kW
+        - PV provides some of this, battery provides the rest
+        - Battery Power = (Target Export + House Load) - PV Production
         """
         # Get target export from number entity
         target_export_kw = safe_get_entity_float(
@@ -220,15 +221,15 @@ class DynamicExportManager:
             f"number.neovolt_{self._device_name}_dynamic_export_target",
             1.0,
         )
-
-        # Get cutoff SOC from number entity
+        
+        # Get discharge SOC cutoff
         soc_cutoff = int(safe_get_entity_float(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_discharge_soc",
             10.0,
         ))
 
-        # Get current load and PV generation from coordinator data
+        # Get current system state from coordinator
         data = self._coordinator.data
         current_load_w = data.get("total_house_load")
         pv_production_w = data.get("pv_power_total", 0)
@@ -314,14 +315,15 @@ class DynamicExportManager:
             self._last_commanded_power = -charge_power_kw
             
         else:
-            # Between -0.5kW and +0.5kW - within tolerance, stop dispatch
+            # Between -0.5kW and +0.5kW - within tolerance, send standby command
+            # but keep Dynamic Export mode running
             _LOGGER.info(
                 f"Dynamic Export: Battery power needed {battery_power_needed_kw:.2f}kW "
                 f"is within tolerance (-0.5 to +0.5kW). "
-                f"PV is covering target export. Stopping dispatch."
+                f"PV is covering target export. Sending standby command."
             )
-            await self._stop_dispatch()
-            return
+            await self._send_standby_command()
+            self._last_commanded_power = 0.0
 
         # Update tracking
         self._last_update_time = now
@@ -408,11 +410,41 @@ class DynamicExportManager:
             _LOGGER.error(f"Failed to send Dynamic Export charge command: {e}")
             raise
 
-    async def _stop_dispatch(self) -> None:
-        """Stop dispatch and exit Dynamic Export mode."""
+    async def _send_standby_command(self) -> None:
+        """Send standby command (dispatch start=1 but power=0) to keep mode active."""
+        try:
+            # Keep dispatch active but with 0W command
+            values = [
+                1,                              # Para1: Dispatch start (keep active)
+                0,                              # Para2 high byte
+                MODBUS_OFFSET,                  # Para2 low: 0W (32000 + 0)
+                0,                              # Para3 high byte
+                0,                              # Para3 low: Reactive power = 0
+                DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2
+                0,                              # Para5: SOC (not used for 0W)
+                0,                              # Para6 high byte
+                600,                            # Para6 low: 10 minute timeout
+                255,                            # Para7: Energy routing (default)
+                0,                              # Para8: PV switch (auto)
+            ]
+
+            await self._hass.async_add_executor_job(
+                self._client.write_registers, 0x0880, values
+            )
+
+            # Update coordinator with optimistic values
+            self._coordinator.set_optimistic_value("dispatch_start", 1)
+            self._coordinator.set_optimistic_value("dispatch_power", 0)
+            self._coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_EXPORT)
+
+        except Exception as e:
+            _LOGGER.error(f"Failed to send Dynamic Export standby command: {e}")
+
+    async def _stop_and_reset_dispatch(self) -> None:
+        """Stop dispatch, reset to Normal mode, and exit Dynamic Export."""
         from .const import DISPATCH_RESET_VALUES
         
-        _LOGGER.info("Stopping Dynamic Export - target export achievable with current PV")
+        _LOGGER.info("Dynamic Export duration expired - resetting to Normal mode")
         
         try:
             await self._hass.async_add_executor_job(
