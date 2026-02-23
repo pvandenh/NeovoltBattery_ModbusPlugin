@@ -28,6 +28,7 @@ from .const import (
     DEFAULT_STALENESS_THRESHOLD,
     RECOVERY_COOLDOWN_SECONDS,
     REGISTER_BLOCKS,
+    GRID_POWER_OFFSET_REGISTER,
 )
 from .modbus_client import NeovoltModbusClient
 
@@ -504,6 +505,8 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             return self._parse_settings_registers(regs)
         elif block_name == "dispatch":
             return self._parse_dispatch_registers(regs)
+        elif block_name == "calibration":
+            return self._parse_calibration_registers(regs)
 
         return {}
 
@@ -602,6 +605,23 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             "dispatch_time_remaining": time_raw,   # Remaining time in seconds
             "dispatch_energy_routing": regs[9],    # Para7: Energy routing (0-5, 255=default)
             "dispatch_pv_switch": regs[10],        # Para8: PV switch (0=auto, 1=open, 2=close)
+        }
+
+    def _parse_calibration_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse calibration register block (0x11D3-0x11D5, 3 registers).
+
+        Register map (AlphaESS shared firmware):
+          0x11D3  Grid power calibration point1  (unsigned short, 1W/bit)
+          0x11D4  Grid power calibration coef1   (signed short,   0.0001/bit)
+          0x11D5  Grid power calibration offset1 (signed short,   1W/bit)
+
+        A successful read (no Modbus exception) confirms the calibration block
+        is accessible on this firmware version, setting grid_power_offset_supported=True.
+        """
+        offset_raw = self._to_signed(regs[2])  # 0x11D5 is index 2 (0x11D3 + 2)
+        return {
+            "grid_power_offset": offset_raw,           # Current offset in watts (signed)
+            "grid_power_offset_supported": True,       # Register block responded successfully
         }
 
     def _calculate_derived_values(

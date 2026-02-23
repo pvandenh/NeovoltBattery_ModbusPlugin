@@ -106,4 +106,15 @@ REGISTER_BLOCKS = {
     "pv_inverter_energy": RegisterBlock("pv_inverter_energy", 0x08D0, 2),
     "settings": RegisterBlock("settings", 0x0800, 86),
     "dispatch": RegisterBlock("dispatch", 0x0880, 11),  # Para1-Para8 (11 registers)
+    "calibration": RegisterBlock("calibration", 0x11D3, 3),  # AlphaESS-shared: point1, coef1, offset1
 }
+
+# Grid power calibration offset register (AlphaESS shared firmware, register 0x11D5)
+# Signed 16-bit integer, 1W/bit resolution.
+# Positive value → inverter thinks it is importing more → discharges harder → reduces grid import.
+# This compensates for persistent grid balancing undershoot (small constant import at idle).
+# Register is only present if the firmware exposes the AlphaESS calibration block.
+# Use grid_power_offset_supported sensor to confirm the register responded before relying on it.
+GRID_POWER_OFFSET_REGISTER = 0x11D5
+GRID_POWER_OFFSET_MIN = -500   # W  (negative: shift balance toward import)
+GRID_POWER_OFFSET_MAX = 500    # W  (positive: shift balance toward export / reduce import)

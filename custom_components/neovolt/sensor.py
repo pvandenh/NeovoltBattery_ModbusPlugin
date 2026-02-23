@@ -209,6 +209,10 @@ async def async_setup_entry(
                      SensorStateClass.MEASUREMENT, "mdi:flash"),
         NeovoltDispatchStatusSensor(coordinator, device_info, device_name),
 
+        # Grid power calibration offset readback (AlphaESS shared firmware, register 0x11D5)
+        # Shows the currently active offset in watts. Unavailable if firmware doesn't support it.
+        NeovoltGridPowerOffsetSensor(coordinator, device_info, device_name),
+
         # Calculated/Template Sensors
         NeovoltCalculatedSensor(coordinator, device_info, device_name, "total_house_load", "Total House Load",
                                UnitOfPower.WATT, SensorDeviceClass.POWER,
@@ -469,3 +473,35 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
                 attrs["dynamic_export_running"] = self.coordinator.dynamic_export_manager.is_running
         
         return attrs
+
+class NeovoltGridPowerOffsetSensor(CoordinatorEntity, SensorEntity):
+    """Readback sensor for the grid power calibration offset (register 0x11D5).
+
+    Shows the currently active offset value in watts. The entity reports
+    unavailable until the calibration register block has been successfully
+    read at least once, confirming the AlphaESS shared firmware supports it.
+    If the register does not exist on this firmware the entity stays unavailable.
+    """
+
+    def __init__(self, coordinator, device_info, device_name):
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._attr_name = f"Neovolt {device_name} Grid Power Offset"
+        self._attr_unique_id = f"neovolt_{device_name}_grid_power_offset_sensor"
+        self._attr_native_unit_of_measurement = UnitOfPower.WATT
+        self._attr_device_class = SensorDeviceClass.POWER
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_icon = "mdi:tune"
+        self._attr_device_info = device_info
+
+    @property
+    def available(self) -> bool:
+        """Only available once the calibration block has been confirmed accessible."""
+        if not self.coordinator.has_valid_data:
+            return False
+        return self.coordinator.data.get("grid_power_offset_supported", False)
+
+    @property
+    def native_value(self):
+        """Return the current grid power offset in watts."""
+        return self.coordinator.data.get("grid_power_offset")
