@@ -1,3 +1,6 @@
+This branch adds additional sensors for more unique user requirements or fault troubleshooting
+
+----
 # Neovolt Inverter Integration for Home Assistant
 
 A Home Assistant custom integration for Neovolt/Bytewatt inverters and battery systems using Modbus TCP protocol.
