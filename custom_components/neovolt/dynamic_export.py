@@ -24,6 +24,9 @@ from .const import (
     SOC_CONVERSION_FACTOR,
     MAX_SOC_REGISTER,
     MIN_SOC_REGISTER,
+    COMBINED_HOUSE_LOAD,
+    COMBINED_BATTERY_SOC,
+    COMBINED_PV_POWER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -215,13 +218,17 @@ class DynamicExportManager:
         - PV provides some of this, battery provides the rest
         - Battery Power = (Target Export + House Load) - PV Production
         """
+        # Get current system state from coordinator — must be first so all
+        # subsequent blocks can reference data safely.
+        data = self._coordinator.data
+
         # Get target export from number entity
         target_export_kw = safe_get_entity_float(
             self._hass,
             f"number.neovolt_{self._device_name}_dynamic_export_target",
             1.0,
         )
-        
+
         # Get discharge SOC cutoff
         soc_cutoff = int(safe_get_entity_float(
             self._hass,
@@ -229,19 +236,48 @@ class DynamicExportManager:
             10.0,
         ))
 
-        # Get current system state from coordinator
-        data = self._coordinator.data
-        current_load_w = data.get("total_house_load")
-        pv_production_w = data.get("pv_power_total", 0)
-        
-        if pv_production_w is None:
-            pv_production_w = 0
-            _LOGGER.debug("PV power sensor unavailable, assuming 0W")
+        # ── SOC guard — use combined SOC when follower is linked ─────────────
+        # If the combined (capacity-weighted) SOC is at or below the cutoff,
+        # stop discharging. This prevents draining one pack while the other
+        # still has charge, giving a true system-wide low-SOC cutoff.
+        # Falls back to host battery_soc on single-inverter setups.
+        current_soc = data.get(COMBINED_BATTERY_SOC) or data.get("battery_soc")
+        if current_soc is not None and current_soc <= soc_cutoff:
+            _LOGGER.info(
+                f"Dynamic Export: SOC {current_soc:.1f}% at or below "
+                f"cutoff {soc_cutoff}% — sending standby command"
+            )
+            await self._send_standby_command()
+            self._last_commanded_power = 0.0
+            self._last_update_time = dt_util.now()
+            return
 
-        # Validate we have load data
+        # ── House load ───────────────────────────────────────────────────────
+        # Prefer combined_house_load (set by coordinator when follower linked).
+        # Falls back to total_house_load on single-inverter setups.
+        if COMBINED_HOUSE_LOAD in data and data[COMBINED_HOUSE_LOAD] is not None:
+            current_load_w = data[COMBINED_HOUSE_LOAD]
+            _LOGGER.debug(f"Dynamic Export: using combined_house_load={current_load_w}W")
+        else:
+            current_load_w = data.get("total_house_load")
+            _LOGGER.debug(f"Dynamic Export: using total_house_load={current_load_w}W (no follower)")
+
+        # Validate we have load data before proceeding
         if current_load_w is None:
             _LOGGER.warning("Cannot calculate Dynamic Export - house load unavailable")
             return
+
+        # ── PV power ─────────────────────────────────────────────────────────
+        # Prefer combined_pv_power when follower is linked.
+        # Falls back to host pv_power_total on single-inverter setups.
+        if COMBINED_PV_POWER in data and data[COMBINED_PV_POWER] is not None:
+            pv_production_w = data[COMBINED_PV_POWER]
+        else:
+            pv_production_w = data.get("pv_power_total", 0)
+
+        if pv_production_w is None:
+            pv_production_w = 0
+            _LOGGER.debug("PV power sensor unavailable, assuming 0W")
 
         # CORRECTED CALCULATION:
         # To export X kW while powering house load Y kW, we need total power of (X + Y) kW

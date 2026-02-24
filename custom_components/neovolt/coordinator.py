@@ -28,6 +28,19 @@ from .const import (
     DEFAULT_STALENESS_THRESHOLD,
     RECOVERY_COOLDOWN_SECONDS,
     REGISTER_BLOCKS,
+    GRID_POWER_OFFSET_REGISTER,
+    COMBINED_BATTERY_POWER,
+    COMBINED_BATTERY_SOC,
+    COMBINED_BATTERY_SOH,
+    COMBINED_BATTERY_CAPACITY,
+    COMBINED_HOUSE_LOAD,
+    COMBINED_PV_POWER,
+    COMBINED_BATTERY_MIN_CELL_V,
+    COMBINED_BATTERY_MAX_CELL_V,
+    COMBINED_BATTERY_MIN_CELL_T,
+    COMBINED_BATTERY_MAX_CELL_T,
+    COMBINED_BATTERY_CHARGE_E,
+    COMBINED_BATTERY_DISCHARGE_E,
 )
 from .modbus_client import NeovoltModbusClient
 
@@ -263,6 +276,11 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         self._daily_energy_before_unavailable = options.get(STORAGE_DAILY_PRESERVED)
         if self._daily_energy_before_unavailable is not None:
             _LOGGER.info(f"Restored preserved daily: {self._daily_energy_before_unavailable} kWh")
+
+        # Reference to a linked follower coordinator (set by __init__.py after both
+        # entries are loaded). When set, combined data keys are calculated and
+        # written into this coordinator's data dict on every update cycle.
+        self.follower_coordinator: "NeovoltDataUpdateCoordinator | None" = None
 
         # Use min_interval as the base coordinator update interval
         update_interval = timedelta(seconds=min_interval)
@@ -504,6 +522,8 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             return self._parse_settings_registers(regs)
         elif block_name == "dispatch":
             return self._parse_dispatch_registers(regs)
+        elif block_name == "calibration":
+            return self._parse_calibration_registers(regs)
 
         return {}
 
@@ -604,6 +624,23 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             "dispatch_pv_switch": regs[10],        # Para8: PV switch (0=auto, 1=open, 2=close)
         }
 
+    def _parse_calibration_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse calibration register block (0x11D3-0x11D5, 3 registers).
+
+        Register map (AlphaESS shared firmware):
+          0x11D3  Grid power calibration point1  (unsigned short, 1W/bit)
+          0x11D4  Grid power calibration coef1   (signed short,   0.0001/bit)
+          0x11D5  Grid power calibration offset1 (signed short,   1W/bit)
+
+        A successful read (no Modbus exception) confirms the calibration block
+        is accessible on this firmware version, setting grid_power_offset_supported=True.
+        """
+        offset_raw = self._to_signed(regs[2])  # 0x11D5 is index 2 (0x11D3 + 2)
+        return {
+            "grid_power_offset": offset_raw,           # Current offset in watts (signed)
+            "grid_power_offset_supported": True,       # Register block responded successfully
+        }
+
     def _calculate_derived_values(
         self, data: Dict[str, Any], successful_reads: Dict[str, bool]
     ) -> None:
@@ -673,6 +710,138 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             data["total_house_load"] = None
             data["house_load_estimated"] = None
             data["excess_grid_export"] = 0
+
+        # ── Combined host + follower calculations ────────────────────────────
+        # Always runs — even with no follower linked — so that combined sensors
+        # fall through to host-only values on single-inverter setups (Option A).
+        # When a follower is linked the combined keys reflect both inverters.
+        self._calculate_combined_values(data)
+
+    def _calculate_combined_values(self, data: Dict[str, Any]) -> None:
+        """
+        Merge host and follower data into combined keys.
+
+        Called from _calculate_derived_values() on every update cycle.
+        When no follower is linked, combined keys fall through to host-only
+        values so that single-inverter setups work identically.
+
+        Combined keys produced
+        ──────────────────────
+        combined_battery_power          W   sum (neg = charging)
+        combined_battery_soc            %   capacity-weighted average
+        combined_battery_soh            %   capacity-weighted average
+        combined_battery_capacity       kWh sum
+        combined_house_load             W   host + follower total_house_load registers
+        combined_pv_power               W   sum (follower usually 0)
+        combined_battery_min_cell_voltage V  minimum across both packs
+        combined_battery_max_cell_voltage V  maximum across both packs
+        combined_battery_min_cell_temp  °C  minimum across both packs
+        combined_battery_max_cell_temp  °C  maximum across both packs
+        combined_battery_charge_energy  kWh sum
+        combined_battery_discharge_energy kWh sum
+        """
+        # Use follower data when linked, otherwise empty dict (host-only fallthrough)
+        fdata = (self.follower_coordinator.data or {}) if self.follower_coordinator is not None else {}
+        has_follower = bool(fdata)
+
+        # ── Battery power ────────────────────────────────────────────────────
+        host_batt_pwr = data.get("battery_power", 0) or 0
+        foll_batt_pwr = fdata.get("battery_power", 0) or 0
+        data[COMBINED_BATTERY_POWER] = host_batt_pwr + foll_batt_pwr
+
+        # ── Battery capacity (needed for weighted averages) ──────────────────
+        host_cap = data.get("battery_capacity") or 20.1
+        foll_cap = fdata.get("battery_capacity") or (20.1 if has_follower else 0.0)
+        total_cap = host_cap + foll_cap
+        data[COMBINED_BATTERY_CAPACITY] = round(total_cap, 1)
+
+        # ── Battery SOC — capacity-weighted average ──────────────────────────
+        host_soc = data.get("battery_soc", 0) or 0
+        foll_soc = fdata.get("battery_soc", 0) or 0
+        if has_follower:
+            weighted = ((host_soc * host_cap) + (foll_soc * foll_cap)) / total_cap
+            data[COMBINED_BATTERY_SOC] = round(weighted, 1)
+        else:
+            data[COMBINED_BATTERY_SOC] = host_soc
+
+        # ── Battery SOH — capacity-weighted average ──────────────────────────
+        host_soh = data.get("battery_soh", 0) or 0
+        foll_soh = fdata.get("battery_soh", 0) or 0
+        if has_follower:
+            weighted_soh = ((host_soh * host_cap) + (foll_soh * foll_cap)) / total_cap
+            data[COMBINED_BATTERY_SOH] = round(weighted_soh, 1)
+        else:
+            data[COMBINED_BATTERY_SOH] = host_soh
+
+        # ── House load ───────────────────────────────────────────────────────
+        # Sum the raw total_house_load register values from both inverters.
+        # This is the correct approach: each inverter reports its own view of
+        # the AC loads on its bus, and summing gives the true system house load.
+        # On a single-inverter setup this equals the host value alone.
+        #
+        # Note: coordinator data["total_house_load"] is the CALCULATED value
+        # (pv + battery + grid). The raw Modbus register house load is stored
+        # separately as "house_load_raw" when available, but for the follower
+        # we read it directly from the follower coordinator's data.
+        # The follower's total_house_load key comes from its own coordinator's
+        # _calculate_derived_values() (same formula: pv + battery + grid),
+        # which on the follower correctly captures its share of the load.
+        host_load = data.get("total_house_load") or 0
+        foll_load = fdata.get("total_house_load") or 0
+        combined_load = host_load + foll_load
+        data[COMBINED_HOUSE_LOAD] = max(0, combined_load)
+
+        # ── PV power ─────────────────────────────────────────────────────────
+        host_pv = data.get("pv_power_total", 0) or 0
+        foll_pv = fdata.get("pv_power_total", 0) or 0
+        data[COMBINED_PV_POWER] = max(0, host_pv + foll_pv)
+
+        # ── Cell voltages — worst case across both packs ─────────────────────
+        host_min_v = data.get("battery_min_cell_voltage")
+        foll_min_v = fdata.get("battery_min_cell_voltage")
+        if host_min_v is not None and foll_min_v is not None:
+            data[COMBINED_BATTERY_MIN_CELL_V] = round(min(host_min_v, foll_min_v), 3)
+        elif host_min_v is not None:
+            data[COMBINED_BATTERY_MIN_CELL_V] = host_min_v
+
+        host_max_v = data.get("battery_max_cell_voltage")
+        foll_max_v = fdata.get("battery_max_cell_voltage")
+        if host_max_v is not None and foll_max_v is not None:
+            data[COMBINED_BATTERY_MAX_CELL_V] = round(max(host_max_v, foll_max_v), 3)
+        elif host_max_v is not None:
+            data[COMBINED_BATTERY_MAX_CELL_V] = host_max_v
+
+        # ── Cell temperatures — worst case across both packs ─────────────────
+        host_min_t = data.get("battery_min_cell_temp")
+        foll_min_t = fdata.get("battery_min_cell_temp")
+        if host_min_t is not None and foll_min_t is not None:
+            data[COMBINED_BATTERY_MIN_CELL_T] = round(min(host_min_t, foll_min_t), 1)
+        elif host_min_t is not None:
+            data[COMBINED_BATTERY_MIN_CELL_T] = host_min_t
+
+        host_max_t = data.get("battery_max_cell_temp")
+        foll_max_t = fdata.get("battery_max_cell_temp")
+        if host_max_t is not None and foll_max_t is not None:
+            data[COMBINED_BATTERY_MAX_CELL_T] = round(max(host_max_t, foll_max_t), 1)
+        elif host_max_t is not None:
+            data[COMBINED_BATTERY_MAX_CELL_T] = host_max_t
+
+        # ── Cumulative energy — summed ────────────────────────────────────────
+        host_charge_e = data.get("battery_charge_energy", 0) or 0
+        foll_charge_e = fdata.get("battery_charge_energy", 0) or 0
+        data[COMBINED_BATTERY_CHARGE_E] = round(host_charge_e + foll_charge_e, 2)
+
+        host_disc_e = data.get("battery_discharge_energy", 0) or 0
+        foll_disc_e = fdata.get("battery_discharge_energy", 0) or 0
+        data[COMBINED_BATTERY_DISCHARGE_E] = round(host_disc_e + foll_disc_e, 2)
+
+        _LOGGER.debug(
+            f"Combined values ({'host+follower' if has_follower else 'host only'}): "
+            f"batt_pwr={data.get(COMBINED_BATTERY_POWER)}W, "
+            f"soc={data.get(COMBINED_BATTERY_SOC)}%, "
+            f"house_load={data.get(COMBINED_HOUSE_LOAD)}W, "
+            f"pv={data.get(COMBINED_PV_POWER)}W"
+        )
 
     def _calculate_daily_pv_energy(self, total_energy: float) -> tuple[float, bool]:
         """

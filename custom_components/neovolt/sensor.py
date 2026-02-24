@@ -21,7 +21,22 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    DEVICE_ROLE_HOST,
+    COMBINED_BATTERY_POWER,
+    COMBINED_BATTERY_SOC,
+    COMBINED_BATTERY_SOH,
+    COMBINED_BATTERY_CAPACITY,
+    COMBINED_HOUSE_LOAD,
+    COMBINED_PV_POWER,
+    COMBINED_BATTERY_MIN_CELL_V,
+    COMBINED_BATTERY_MAX_CELL_V,
+    COMBINED_BATTERY_MIN_CELL_T,
+    COMBINED_BATTERY_MAX_CELL_T,
+    COMBINED_BATTERY_CHARGE_E,
+    COMBINED_BATTERY_DISCHARGE_E,
+)
 
 
 async def async_setup_entry(
@@ -33,6 +48,7 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     device_name = hass.data[DOMAIN][entry.entry_id]["device_name"]
+    device_role = hass.data[DOMAIN][entry.entry_id]["device_role"]
 
     sensors = [
         # Grid Sensors
@@ -209,6 +225,10 @@ async def async_setup_entry(
                      SensorStateClass.MEASUREMENT, "mdi:flash"),
         NeovoltDispatchStatusSensor(coordinator, device_info, device_name),
 
+        # Grid power calibration offset readback (AlphaESS shared firmware, register 0x11D5)
+        # Shows the currently active offset in watts. Unavailable if firmware doesn't support it.
+        NeovoltGridPowerOffsetSensor(coordinator, device_info, device_name),
+
         # Calculated/Template Sensors
         NeovoltCalculatedSensor(coordinator, device_info, device_name, "total_house_load", "Total House Load",
                                UnitOfPower.WATT, SensorDeviceClass.POWER,
@@ -225,7 +245,89 @@ async def async_setup_entry(
                                UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
                                "mdi:solar-power-variant-outline"),
     ]
-    
+
+    # ── Combined host + follower sensors (host device only) ──────────────────
+    # These sensors appear on the host device and show system-wide totals.
+    # They are populated by the coordinator only when a follower is linked.
+    # On a single-inverter system they will show as unavailable until a
+    # follower is configured, at which point they update automatically.
+    if device_role == DEVICE_ROLE_HOST:
+        combined_sensors = [
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_POWER, "Combined Battery Power",
+                UnitOfPower.WATT, SensorDeviceClass.POWER,
+                SensorStateClass.MEASUREMENT, "mdi:battery-charging",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_SOC, "Combined Battery SOC",
+                PERCENTAGE, SensorDeviceClass.BATTERY,
+                SensorStateClass.MEASUREMENT, "mdi:battery",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_SOH, "Combined Battery SOH",
+                PERCENTAGE, None,
+                SensorStateClass.MEASUREMENT, "mdi:battery-heart-variant",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_CAPACITY, "Combined Battery Capacity",
+                UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
+                SensorStateClass.TOTAL, "mdi:battery-charging-100",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_HOUSE_LOAD, "Combined House Load",
+                UnitOfPower.WATT, SensorDeviceClass.POWER,
+                SensorStateClass.MEASUREMENT, "mdi:home-lightning-bolt",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_PV_POWER, "Combined PV Power",
+                UnitOfPower.WATT, SensorDeviceClass.POWER,
+                SensorStateClass.MEASUREMENT, "mdi:solar-power",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_MIN_CELL_V, "Combined Battery Min Cell Voltage",
+                UnitOfElectricPotential.VOLT, SensorDeviceClass.VOLTAGE,
+                SensorStateClass.MEASUREMENT, "mdi:battery-low",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_MAX_CELL_V, "Combined Battery Max Cell Voltage",
+                UnitOfElectricPotential.VOLT, SensorDeviceClass.VOLTAGE,
+                SensorStateClass.MEASUREMENT, "mdi:battery-high",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_MIN_CELL_T, "Combined Battery Min Cell Temperature",
+                UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE,
+                SensorStateClass.MEASUREMENT, "mdi:thermometer-low",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_MAX_CELL_T, "Combined Battery Max Cell Temperature",
+                UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE,
+                SensorStateClass.MEASUREMENT, "mdi:thermometer-high",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_CHARGE_E, "Combined Battery Charge Energy",
+                UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
+                SensorStateClass.TOTAL_INCREASING, "mdi:battery-plus",
+            ),
+            NeovoltCombinedSensor(
+                coordinator, device_info, device_name,
+                COMBINED_BATTERY_DISCHARGE_E, "Combined Battery Discharge Energy",
+                UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY,
+                SensorStateClass.TOTAL_INCREASING, "mdi:battery-minus",
+            ),
+        ]
+        sensors.extend(combined_sensors)
+
     async_add_entities(sensors)
 
 
@@ -304,6 +406,55 @@ class NeovoltCalculatedSensor(CoordinatorEntity, SensorEntity):
     def extra_state_attributes(self):
         """Return additional state attributes including data freshness."""
         attrs = {}
+        if hasattr(self.coordinator, 'data_age_seconds'):
+            age = self.coordinator.data_age_seconds
+            if age is not None:
+                attrs["data_age_seconds"] = round(age)
+                attrs["data_stale"] = age > 43200  # 12 hours
+        return attrs
+
+
+class NeovoltCombinedSensor(CoordinatorEntity, SensorEntity):
+    """Combined host + follower sensor — shows system-wide totals on the host device.
+
+    Values are pre-calculated by the coordinator's _calculate_combined_values()
+    and written into the host data dict as COMBINED_* keys. If no follower is
+    linked the key will be absent from the data dict and the sensor reports
+    unavailable, distinguishing it clearly from a zero reading.
+    """
+
+    def __init__(self, coordinator, device_info, device_name, key, name, unit,
+                 device_class, state_class, icon):
+        """Initialize the combined sensor."""
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_name = f"Neovolt {device_name} {name}"
+        self._attr_unique_id = f"neovolt_{device_name}_{key}"
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_state_class = state_class
+        self._attr_icon = icon
+        self._attr_device_info = device_info
+
+    @property
+    def available(self) -> bool:
+        """Available whenever the host coordinator has valid data.
+
+        Option A behaviour: combined sensors always show a value. When no
+        follower is linked they equal the host-only value. When a follower is
+        linked they reflect the true combined system total.
+        """
+        return self.coordinator.has_valid_data and self._key in self.coordinator.data
+
+    @property
+    def native_value(self):
+        """Return the combined value from the host coordinator data dict."""
+        return self.coordinator.data.get(self._key)
+
+    @property
+    def extra_state_attributes(self):
+        """Return data freshness attributes and follower link status."""
+        attrs = {"follower_linked": self.coordinator.follower_coordinator is not None}
         if hasattr(self.coordinator, 'data_age_seconds'):
             age = self.coordinator.data_age_seconds
             if age is not None:
@@ -469,3 +620,35 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
                 attrs["dynamic_export_running"] = self.coordinator.dynamic_export_manager.is_running
         
         return attrs
+
+class NeovoltGridPowerOffsetSensor(CoordinatorEntity, SensorEntity):
+    """Readback sensor for the grid power calibration offset (register 0x11D5).
+
+    Shows the currently active offset value in watts. The entity reports
+    unavailable until the calibration register block has been successfully
+    read at least once, confirming the AlphaESS shared firmware supports it.
+    If the register does not exist on this firmware the entity stays unavailable.
+    """
+
+    def __init__(self, coordinator, device_info, device_name):
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._attr_name = f"Neovolt {device_name} Grid Power Offset"
+        self._attr_unique_id = f"neovolt_{device_name}_grid_power_offset_sensor"
+        self._attr_native_unit_of_measurement = UnitOfPower.WATT
+        self._attr_device_class = SensorDeviceClass.POWER
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_icon = "mdi:tune"
+        self._attr_device_info = device_info
+
+    @property
+    def available(self) -> bool:
+        """Only available once the calibration block has been confirmed accessible."""
+        if not self.coordinator.has_valid_data:
+            return False
+        return self.coordinator.data.get("grid_power_offset_supported", False)
+
+    @property
+    def native_value(self):
+        """Return the current grid power offset in watts."""
+        return self.coordinator.data.get("grid_power_offset")

@@ -13,6 +13,7 @@ from .const import (
     CONF_MAX_CHARGE_POWER,
     CONF_MAX_DISCHARGE_POWER,
     DEVICE_ROLE_HOST,
+    DEVICE_ROLE_FOLLOWER,
     DOMAIN,
     CONF_MIN_POLL_INTERVAL,
     CONF_MAX_POLL_INTERVAL,
@@ -104,10 +105,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
+    # ── Link follower coordinator into host ──────────────────────────────────
+    # After every entry setup (host or follower), scan all loaded Neovolt entries
+    # and wire any follower coordinator reference into the host coordinator.
+    # This is safe to call multiple times — it simply re-links on each load.
+    _link_follower_to_host(hass)
+
     # Setup options update listener
     entry.async_on_unload(entry.add_update_listener(update_listener))
 
     return True
+
+
+def _link_follower_to_host(hass: HomeAssistant) -> None:
+    """Wire the follower coordinator reference into the host coordinator.
+
+    Called after every Neovolt entry loads so that, regardless of which entry
+    loads first, the host always ends up with a valid follower_coordinator
+    reference once both are ready.
+
+    If more than one follower is found, the first one encountered is linked.
+    If no follower is present (single-inverter setup), the host's
+    follower_coordinator is set to None and combined keys are not produced.
+    """
+    domain_data = hass.data.get(DOMAIN, {})
+
+    host_entry_id = None
+    follower_entry_id = None
+
+    for entry_id, entry_data in domain_data.items():
+        role = entry_data.get("device_role")
+        if role == DEVICE_ROLE_HOST and host_entry_id is None:
+            host_entry_id = entry_id
+        elif role == DEVICE_ROLE_FOLLOWER and follower_entry_id is None:
+            follower_entry_id = entry_id
+
+    if host_entry_id is None:
+        return  # Host not loaded yet
+
+    host_coordinator = domain_data[host_entry_id]["coordinator"]
+
+    if follower_entry_id is not None:
+        follower_coordinator = domain_data[follower_entry_id]["coordinator"]
+        if host_coordinator.follower_coordinator is not follower_coordinator:
+            host_coordinator.follower_coordinator = follower_coordinator
+            _LOGGER.info(
+                f"Linked follower coordinator "
+                f"({domain_data[follower_entry_id]['device_name']}) "
+                f"into host coordinator "
+                f"({domain_data[host_entry_id]['device_name']}) — "
+                f"combined sensors active"
+            )
+    else:
+        # No follower present — clear any stale reference
+        if host_coordinator.follower_coordinator is not None:
+            host_coordinator.follower_coordinator = None
+            _LOGGER.info("Follower coordinator unlinked — combined sensors disabled")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -130,6 +183,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await hass.async_add_executor_job(client.close)
                 _LOGGER.debug("Closed Modbus connection for Neovolt integration")
             hass.data[DOMAIN].pop(entry.entry_id, None)
+
+        # Re-link after unload — if the follower was removed, clear the host's reference
+        _link_follower_to_host(hass)
 
     return unload_ok
 
