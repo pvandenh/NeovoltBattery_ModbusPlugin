@@ -22,12 +22,13 @@ CONF_MAX_DISCHARGE_POWER = "max_discharge_power"
 # Default power limits (in kW)
 DEFAULT_MAX_CHARGE_POWER = 5.0
 DEFAULT_MAX_DISCHARGE_POWER = 5.0
-MIN_POWER = 0.5
+MIN_POWER = 0.05  # Lowered to allow gentle trickle export (50W) for zero-import bias correction
 MAX_POWER_LIMIT = 100.0  # 100kW max for safety (supports parallel systems)
 
 # Dynamic Export mode configuration
 CONF_DYNAMIC_EXPORT_TARGET = "dynamic_export_target"
-DEFAULT_DYNAMIC_EXPORT_TARGET = 1.0  # 1kW above load by default
+DEFAULT_DYNAMIC_EXPORT_TARGET = 0.05  # 50W default — gentle trickle to stay on export side
+DYNAMIC_EXPORT_MIN_POWER = 0.05       # 50W minimum — allows zero-import bias correction
 DYNAMIC_EXPORT_MAX_POWER = 15.0  # 15kW max to support extended system configurations
 DYNAMIC_EXPORT_UPDATE_INTERVAL = 10  # seconds between power adjustments
 DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD = 0.3  # kW - only update if change > this

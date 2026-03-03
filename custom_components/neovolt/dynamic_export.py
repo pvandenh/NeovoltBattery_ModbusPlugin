@@ -19,6 +19,7 @@ from .const import (
     DISPATCH_MODE_DYNAMIC_EXPORT,
     DISPATCH_MODE_POWER_WITH_SOC,
     DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD,
+    DYNAMIC_EXPORT_MIN_POWER,
     DYNAMIC_EXPORT_UPDATE_INTERVAL,
     MODBUS_OFFSET,
     SOC_CONVERSION_FACTOR,
@@ -323,7 +324,7 @@ class DynamicExportManager:
             return
 
         # Determine action based on battery power needed
-        if battery_power_needed_kw > 0.5:
+        if battery_power_needed_kw > DYNAMIC_EXPORT_MIN_POWER:
             # Need to discharge battery (positive power)
             discharge_power_kw = min(battery_power_needed_kw, self._max_discharge_power)
             
@@ -336,7 +337,7 @@ class DynamicExportManager:
             await self._send_discharge_command(discharge_power_kw, soc_cutoff)
             self._last_commanded_power = discharge_power_kw
             
-        elif battery_power_needed_kw < -0.5:
+        elif battery_power_needed_kw < -DYNAMIC_EXPORT_MIN_POWER:
             # Need to charge battery (negative power = excess PV)
             # Charge at the excess rate to absorb surplus and maintain target export
             charge_power_kw = min(abs(battery_power_needed_kw), self._max_charge_power)

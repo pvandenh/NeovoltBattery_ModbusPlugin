@@ -18,11 +18,9 @@ from .const import (
     DEFAULT_MAX_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
     DEFAULT_DYNAMIC_EXPORT_TARGET,
+    DYNAMIC_EXPORT_MIN_POWER,
     DYNAMIC_EXPORT_MAX_POWER,
     DEVICE_ROLE_FOLLOWER,
-    GRID_POWER_OFFSET_REGISTER,
-    GRID_POWER_OFFSET_MIN,
-    GRID_POWER_OFFSET_MAX,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,7 +97,7 @@ async def async_setup_entry(
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
             "dynamic_export_target", "Dynamic Export Target",
-            0.5, DYNAMIC_EXPORT_MAX_POWER, 0.1, UnitOfPower.KILO_WATT, None, False,
+            DYNAMIC_EXPORT_MIN_POWER, DYNAMIC_EXPORT_MAX_POWER, 0.05, UnitOfPower.KILO_WATT, None, False,
             default_value=DEFAULT_DYNAMIC_EXPORT_TARGET, icon="mdi:transmission-tower-export",
             config_entry=entry, fixed_max=True
         ),
@@ -112,14 +110,6 @@ async def async_setup_entry(
             icon="mdi:solar-power", config_entry=entry, is_32bit=True
         ),
 
-        # Grid Power Offset (AlphaESS shared firmware, register 0x11D5)
-        # Compensates for persistent grid import undershoot (small constant import at idle).
-        # Positive value → inverter believes it is importing more → discharges slightly harder.
-        # Set to 0 to disable (default). The entity will show as unavailable if the
-        # calibration register block is not supported on this firmware version.
-        NeovoltGridPowerOffsetNumber(
-            coordinator, device_info, device_name, client, hass
-        ),
     ]
 
     async_add_entities(numbers)
@@ -246,64 +236,3 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
                 self.async_write_ha_state()
         except Exception as e:
             _LOGGER.error(f"Failed to set {self._key}: {e}")
-
-
-class NeovoltGridPowerOffsetNumber(CoordinatorEntity, NumberEntity):
-    """Grid power calibration offset — register 0x11D5 (AlphaESS shared firmware).
-
-    Positive value (e.g. 30) → inverter thinks it is importing 30W more than measured
-    → it discharges slightly harder → persistent grid import undershoot is cancelled.
-
-    Set to 0 to disable. The entity reports unavailable if the calibration register
-    block is not accessible on this firmware (grid_power_offset_supported == False or absent).
-    """
-
-    def __init__(self, coordinator, device_info, device_name, client, hass):
-        """Initialize the grid power offset number."""
-        super().__init__(coordinator)
-        self._client = client
-        self._hass = hass
-        self._device_name = device_name
-        self._attr_name = f"Neovolt {device_name} Grid Power Offset"
-        self._attr_unique_id = f"neovolt_{device_name}_grid_power_offset"
-        self._attr_native_min_value = GRID_POWER_OFFSET_MIN
-        self._attr_native_max_value = GRID_POWER_OFFSET_MAX
-        self._attr_native_step = 1
-        self._attr_native_unit_of_measurement = UnitOfPower.WATT
-        self._attr_mode = NumberMode.SLIDER
-        self._attr_icon = "mdi:tune"
-        self._attr_device_info = device_info
-
-    @property
-    def available(self) -> bool:
-        """Return True only if the calibration register block is confirmed accessible."""
-        if not self.coordinator.has_valid_data:
-            return False
-        # Only available once the calibration block has been successfully read at least once.
-        # If the register doesn't exist on this firmware, grid_power_offset_supported stays absent.
-        return self.coordinator.data.get("grid_power_offset_supported", False)
-
-    @property
-    def native_value(self):
-        """Return the current grid power offset in watts."""
-        return self.coordinator.data.get("grid_power_offset")
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Write new grid power offset to register 0x11D5."""
-        int_value = int(value)
-        # Encode as a 16-bit two's-complement value for negative numbers
-        if int_value < 0:
-            int_value = int_value & 0xFFFF
-        try:
-            _LOGGER.info(
-                f"Writing grid power offset {value}W to register "
-                f"{hex(GRID_POWER_OFFSET_REGISTER)} for {self._device_name}"
-            )
-            await self._hass.async_add_executor_job(
-                self._client.write_register, GRID_POWER_OFFSET_REGISTER, int_value
-            )
-            # Optimistic update so UI reflects the change immediately
-            self.coordinator.set_optimistic_value("grid_power_offset", int(value))
-            await self.coordinator.async_request_refresh()
-        except Exception as e:
-            _LOGGER.error(f"Failed to set grid power offset: {e}")
