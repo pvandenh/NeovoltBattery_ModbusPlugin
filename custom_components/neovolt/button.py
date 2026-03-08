@@ -60,7 +60,7 @@ class NeovoltStopForceChargeDischargeButton(CoordinatorEntity, ButtonEntity):
         """Handle the button press."""
         try:
             _LOGGER.info("Stopping all force charge/discharge operations")
-            
+
             # Stop dynamic export manager if running
             if hasattr(self.coordinator, 'dynamic_export_manager'):
                 try:
@@ -68,7 +68,15 @@ class NeovoltStopForceChargeDischargeButton(CoordinatorEntity, ButtonEntity):
                     _LOGGER.info("Stopped Dynamic Export manager")
                 except Exception as e:
                     _LOGGER.debug(f"Dynamic Export manager not running or already stopped: {e}")
-            
+
+            # Stop dynamic import manager if running
+            if hasattr(self.coordinator, 'dynamic_import_manager'):
+                try:
+                    await self.coordinator.dynamic_import_manager.stop()
+                    _LOGGER.info("Stopped Dynamic Import manager")
+                except Exception as e:
+                    _LOGGER.debug(f"Dynamic Import manager not running or already stopped: {e}")
+
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )

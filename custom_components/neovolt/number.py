@@ -92,11 +92,14 @@ async def async_setup_entry(
             default_value=10, icon="mdi:battery-low"
         ),
 
-        # Dynamic Export Target (local storage, used by dynamic export mode)
-        # Fixed max to 15kW to support AC-coupled systems
+        # Dynamic Mode Power Target (local storage, used by both Dynamic Export and Dynamic Import)
+        # Renamed from "Dynamic Export Target" to serve both export and import modes.
+        # - In Dynamic Export mode: sets the target export power above house load (kW).
+        # - In Dynamic Import mode: sets the target import power drawn from the grid (kW).
+        # Fixed max to 15kW to support AC-coupled systems.
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
-            "dynamic_export_target", "Dynamic Export Target",
+            "dynamic_mode_power_target", "Dynamic Mode Power Target",
             DYNAMIC_EXPORT_MIN_POWER, DYNAMIC_EXPORT_MAX_POWER, 0.05, UnitOfPower.KILO_WATT, None, False,
             default_value=DEFAULT_DYNAMIC_EXPORT_TARGET, icon="mdi:transmission-tower-export",
             config_entry=entry, fixed_max=True
@@ -175,10 +178,10 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     @property
     def native_max_value(self) -> float:
         """Return the maximum value (dynamically from config if applicable)."""
-        # Skip dynamic max update if fixed_max is True (e.g., dynamic_export_target)
+        # Skip dynamic max update if fixed_max is True (e.g., dynamic_mode_power_target)
         if self._fixed_max:
             return self._attr_native_max_value
-        
+
         # Update max value from config entry for power settings
         if self._config_entry and self._key in ["dispatch_power", "pv_capacity"]:
             if self._key == "dispatch_power":

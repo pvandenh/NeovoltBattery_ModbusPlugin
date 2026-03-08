@@ -168,15 +168,24 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         # Close Modbus connection before cleanup (with safety check)
         if entry.entry_id in hass.data.get(DOMAIN, {}):
-            # Stop dynamic export manager if running
             coordinator = hass.data[DOMAIN][entry.entry_id].get("coordinator")
+
+            # Stop dynamic export manager if running
             if coordinator and hasattr(coordinator, 'dynamic_export_manager'):
                 try:
                     await coordinator.dynamic_export_manager.stop()
                     _LOGGER.info("Stopped Dynamic Export manager during unload")
                 except Exception as e:
                     _LOGGER.debug(f"Error stopping Dynamic Export manager (ignored): {e}")
-            
+
+            # Stop dynamic import manager if running
+            if coordinator and hasattr(coordinator, 'dynamic_import_manager'):
+                try:
+                    await coordinator.dynamic_import_manager.stop()
+                    _LOGGER.info("Stopped Dynamic Import manager during unload")
+                except Exception as e:
+                    _LOGGER.debug(f"Error stopping Dynamic Import manager (ignored): {e}")
+
             # Close Modbus connection
             client = hass.data[DOMAIN][entry.entry_id].get("client")
             if client:

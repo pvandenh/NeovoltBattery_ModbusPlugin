@@ -25,7 +25,7 @@ DEFAULT_MAX_DISCHARGE_POWER = 5.0
 MIN_POWER = 0.05  # Lowered to allow gentle trickle export (50W) for zero-import bias correction
 MAX_POWER_LIMIT = 100.0  # 100kW max for safety (supports parallel systems)
 
-# Dynamic Export mode configuration
+# Dynamic Export/Import mode configuration
 CONF_DYNAMIC_EXPORT_TARGET = "dynamic_export_target"
 DEFAULT_DYNAMIC_EXPORT_TARGET = 0.05  # 50W default — gentle trickle to stay on export side
 DYNAMIC_EXPORT_MIN_POWER = 0.05       # 50W minimum — allows zero-import bias correction
@@ -53,6 +53,7 @@ MODBUS_OFFSET = 32000
 DISPATCH_MODE_POWER_ONLY = 0  # Control by power only
 DISPATCH_MODE_POWER_WITH_SOC = 2  # Control by power with SOC limit
 DISPATCH_MODE_DYNAMIC_EXPORT = 99  # Custom mode for dynamic export (internal only)
+DISPATCH_MODE_DYNAMIC_IMPORT = 98  # Custom mode for dynamic import (internal only)
 
 # Dispatch command duration default (seconds)
 # Used when resetting dispatch - maintains previous command for 90 seconds

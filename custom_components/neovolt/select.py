@@ -13,6 +13,7 @@ from .const import (
     DEVICE_ROLE_FOLLOWER,
     DISPATCH_MODE_POWER_WITH_SOC,
     DISPATCH_MODE_DYNAMIC_EXPORT,
+    DISPATCH_MODE_DYNAMIC_IMPORT,
     DISPATCH_RESET_VALUES,
     DOMAIN,
     MAX_SOC_PERCENT,
@@ -202,6 +203,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         "Force Charge",
         "Force Discharge",
         "Dynamic Export",
+        "Dynamic Import",
         "No Battery Charge",
     ]
 
@@ -237,6 +239,10 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if dispatch_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
             return "Dynamic Export"
 
+        # Detect dynamic import mode (internal tracking mode)
+        if dispatch_mode == DISPATCH_MODE_DYNAMIC_IMPORT:
+            return "Dynamic Import"
+
         # Mode 19: No Battery Charge
         if dispatch_mode == 19:
             return "No Battery Charge"
@@ -262,6 +268,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
                 await self._start_force_discharge()
             elif option == "Dynamic Export":
                 await self._start_dynamic_export()
+            elif option == "Dynamic Import":
+                await self._start_dynamic_import()
             elif option == "No Battery Charge":
                 await self._start_no_battery_charge()
             else:
@@ -272,10 +280,12 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
 
     async def _stop_dispatch(self):
         """Stop all active dispatch modes (Normal mode)."""
-        # Stop dynamic export if running
+        # Stop dynamic export/import if running
         if hasattr(self.coordinator, 'dynamic_export_manager'):
             await self.coordinator.dynamic_export_manager.stop()
-        
+        if hasattr(self.coordinator, 'dynamic_import_manager'):
+            await self.coordinator.dynamic_import_manager.stop()
+
         _LOGGER.info("Stopping dispatch, returning to Normal mode")
         await self._hass.async_add_executor_job(
             self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
@@ -287,10 +297,12 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
 
     async def _start_force_charge(self):
         """Start force charging with parameters from number entities."""
-        # Stop dynamic export if running
+        # Stop dynamic export/import if running
         if hasattr(self.coordinator, 'dynamic_export_manager'):
             await self.coordinator.dynamic_export_manager.stop()
-        
+        if hasattr(self.coordinator, 'dynamic_import_manager'):
+            await self.coordinator.dynamic_import_manager.stop()
+
         power = safe_get_entity_float(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_power",
@@ -344,10 +356,12 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
 
     async def _start_force_discharge(self):
         """Start force discharging with parameters from number entities."""
-        # Stop dynamic export if running
+        # Stop dynamic export/import if running
         if hasattr(self.coordinator, 'dynamic_export_manager'):
             await self.coordinator.dynamic_export_manager.stop()
-        
+        if hasattr(self.coordinator, 'dynamic_import_manager'):
+            await self.coordinator.dynamic_import_manager.stop()
+
         power = safe_get_entity_float(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_power",
@@ -402,7 +416,11 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
     async def _start_dynamic_export(self):
         """Start Dynamic Export mode - discharge at load + target kW."""
         _LOGGER.info("Starting Dynamic Export mode")
-        
+
+        # Stop dynamic import if running
+        if hasattr(self.coordinator, 'dynamic_import_manager'):
+            await self.coordinator.dynamic_import_manager.stop()
+
         # Initialize dynamic export manager if not exists
         if not hasattr(self.coordinator, 'dynamic_export_manager'):
             from .dynamic_export import DynamicExportManager
@@ -410,7 +428,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
                 self._hass, self.coordinator, self._client, self._device_name
             )
             _LOGGER.debug("Created new Dynamic Export manager instance")
-        
+
         # Start the dynamic export control loop
         try:
             await self.coordinator.dynamic_export_manager.start()
@@ -418,18 +436,49 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         except Exception as e:
             _LOGGER.error(f"Failed to start Dynamic Export manager: {e}", exc_info=True)
             return
-        
+
         # Set optimistic values for UI
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_EXPORT)
         await self.coordinator.async_request_refresh()
 
-    async def _start_no_battery_charge(self):
-        """Mode 19: Prevent all battery charging (solar & grid)."""
+    async def _start_dynamic_import(self):
+        """Start Dynamic Import mode - charge battery to maintain target grid import level."""
+        _LOGGER.info("Starting Dynamic Import mode")
+
         # Stop dynamic export if running
         if hasattr(self.coordinator, 'dynamic_export_manager'):
             await self.coordinator.dynamic_export_manager.stop()
-        
+
+        # Initialize dynamic import manager if not exists
+        if not hasattr(self.coordinator, 'dynamic_import_manager'):
+            from .dynamic_export import DynamicImportManager
+            self.coordinator.dynamic_import_manager = DynamicImportManager(
+                self._hass, self.coordinator, self._client, self._device_name
+            )
+            _LOGGER.debug("Created new Dynamic Import manager instance")
+
+        # Start the dynamic import control loop
+        try:
+            await self.coordinator.dynamic_import_manager.start()
+            _LOGGER.info("Dynamic Import manager started successfully")
+        except Exception as e:
+            _LOGGER.error(f"Failed to start Dynamic Import manager: {e}", exc_info=True)
+            return
+
+        # Set optimistic values for UI
+        self.coordinator.set_optimistic_value("dispatch_start", 1)
+        self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_IMPORT)
+        await self.coordinator.async_request_refresh()
+
+    async def _start_no_battery_charge(self):
+        """Mode 19: Prevent all battery charging (solar & grid)."""
+        # Stop dynamic export/import if running
+        if hasattr(self.coordinator, 'dynamic_export_manager'):
+            await self.coordinator.dynamic_export_manager.stop()
+        if hasattr(self.coordinator, 'dynamic_import_manager'):
+            await self.coordinator.dynamic_import_manager.stop()
+
         duration = int(safe_get_entity_float(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_duration",
