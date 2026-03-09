@@ -611,13 +611,49 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         }
 
     def _parse_dispatch_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse dispatch register block (0x0880-0x088A, 11 registers)."""
+        """Parse dispatch register block (0x0880-0x088A, 11 registers).
+
+        The hardware always reports dispatch_mode as the real Modbus mode value
+        (e.g. 2 = POWER_WITH_SOC) regardless of whether a dynamic manager is
+        running.  If we blindly overwrite the cached mode on every poll, the
+        select entity sees mode=2 + power<0 and snaps back to "Force Charge",
+        which then appears to toggle the UI every poll cycle while a dynamic
+        manager is active.
+
+        Fix: when a dynamic manager is actively running we preserve our internal
+        tracking mode constant (98 = Dynamic Import, 99 = Dynamic Export) so the
+        select entity keeps reporting the correct option between polls.
+        """
+        from .const import DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT
+
         power_raw = self._to_unsigned_32(regs[1], regs[2])
         time_raw = self._to_unsigned_32(regs[7], regs[8])
+        hardware_mode = regs[5]
+
+        # Determine the effective dispatch_mode to cache.
+        # If a dynamic manager is running, keep the internal tracking constant
+        # so the UI does not revert to "Force Charge" / "Force Discharge" on
+        # each poll cycle.
+        dynamic_export_running = (
+            hasattr(self, "dynamic_export_manager")
+            and self.dynamic_export_manager.is_running
+        )
+        dynamic_import_running = (
+            hasattr(self, "dynamic_import_manager")
+            and self.dynamic_import_manager.is_running
+        )
+
+        if dynamic_import_running:
+            effective_mode = DISPATCH_MODE_DYNAMIC_IMPORT
+        elif dynamic_export_running:
+            effective_mode = DISPATCH_MODE_DYNAMIC_EXPORT
+        else:
+            effective_mode = hardware_mode
+
         return {
             "dispatch_start": regs[0],
             "dispatch_power": power_raw - 32000,  # Negative = charge, Positive = discharge
-            "dispatch_mode": regs[5],              # Mode number (0, 1, 2, 3, 19, etc.)
+            "dispatch_mode": effective_mode,       # Internal tracking mode when dynamic manager active
             "dispatch_soc": regs[6],               # SOC target/cutoff value
             "dispatch_time_remaining": time_raw,   # Remaining time in seconds
             "dispatch_energy_routing": regs[9],    # Para7: Energy routing (0-5, 255=default)
