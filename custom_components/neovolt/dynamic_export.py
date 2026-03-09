@@ -32,9 +32,7 @@ from .const import (
     SOC_CONVERSION_FACTOR,
     MAX_SOC_REGISTER,
     MIN_SOC_REGISTER,
-    COMBINED_HOUSE_LOAD,
     COMBINED_BATTERY_SOC,
-    COMBINED_PV_POWER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -224,14 +222,27 @@ class DynamicExportManager:
     async def _update_battery_power(self) -> None:
         """
         Calculate required battery power and send appropriate command.
-        
-        CORRECTED CALCULATION:
-        - To export X kW while powering house load Y kW, we need total power of (X + Y) kW
-        - PV provides some of this, battery provides the rest
-        - Battery Power = (Target Export + House Load) - PV Production
+
+        GRID-BASED CALCULATION:
+        The grid meter provides a complete, system-wide view of net power flow,
+        incorporating all inverters (including any follower not visible via Modbus).
+        This makes house load and PV measurements unnecessary for control purposes.
+
+        Sign convention for grid_power_total (from register 0x0021H):
+            positive → importing from grid
+            negative → exporting to grid
+
+        To reach a target export level T (positive kW):
+            current_export  = -grid_power_total   (negate: export is positive here)
+            error           = T - current_export
+            battery_discharge_needed = error
+              > 0 → discharge more (or charge less) to increase export
+              < 0 → charge more (or discharge less) to reduce export / absorb excess
+
+        Equivalent form used below:
+            battery_power_needed = target_export_W + grid_power_total_W
         """
-        # Get current system state from coordinator — must be first so all
-        # subsequent blocks can reference data safely.
+        # Get current system state from coordinator.
         data = self._coordinator.data
 
         # Get target export from number entity
@@ -249,9 +260,6 @@ class DynamicExportManager:
         ))
 
         # ── SOC guard — use combined SOC when follower is linked ─────────────
-        # If the combined (capacity-weighted) SOC is at or below the cutoff,
-        # stop discharging. This prevents draining one pack while the other
-        # still has charge, giving a true system-wide low-SOC cutoff.
         # Falls back to host battery_soc on single-inverter setups.
         current_soc = data.get(COMBINED_BATTERY_SOC) or data.get("battery_soc")
         if current_soc is not None and current_soc <= soc_cutoff:
@@ -264,48 +272,32 @@ class DynamicExportManager:
             self._last_update_time = dt_util.now()
             return
 
-        # ── House load ───────────────────────────────────────────────────────
-        # Prefer combined_house_load (set by coordinator when follower linked).
-        # Falls back to total_house_load on single-inverter setups.
-        if COMBINED_HOUSE_LOAD in data and data[COMBINED_HOUSE_LOAD] is not None:
-            current_load_w = data[COMBINED_HOUSE_LOAD]
-            _LOGGER.debug(f"Dynamic Export: using combined_house_load={current_load_w}W")
-        else:
-            current_load_w = data.get("total_house_load")
-            _LOGGER.debug(f"Dynamic Export: using total_house_load={current_load_w}W (no follower)")
-
-        # Validate we have load data before proceeding
-        if current_load_w is None:
-            _LOGGER.warning("Cannot calculate Dynamic Export - house load unavailable")
+        # ── Grid power (signed, W) ────────────────────────────────────────────
+        # grid_power_total: positive = importing, negative = exporting.
+        # This is the authoritative system-wide measurement — it accounts for
+        # all inverters, house load and PV without needing to read them separately.
+        grid_power_w = data.get("grid_power_total")
+        if grid_power_w is None:
+            _LOGGER.warning("Cannot calculate Dynamic Export — grid_power_total unavailable")
             return
 
-        # ── PV power ─────────────────────────────────────────────────────────
-        # Prefer combined_pv_power when follower is linked.
-        # Falls back to host pv_power_total on single-inverter setups.
-        if COMBINED_PV_POWER in data and data[COMBINED_PV_POWER] is not None:
-            pv_production_w = data[COMBINED_PV_POWER]
-        else:
-            pv_production_w = data.get("pv_power_total", 0)
-
-        if pv_production_w is None:
-            pv_production_w = 0
-            _LOGGER.debug("PV power sensor unavailable, assuming 0W")
-
-        # CORRECTED CALCULATION:
-        # To export X kW while powering house load Y kW, we need total power of (X + Y) kW
-        # PV provides some of this, battery provides the rest
-        # Battery Power = (Target Export + House Load) - PV Production
-        
+        # ── Core calculation ──────────────────────────────────────────────────
+        # battery_power_needed = target_export_W + grid_power_total_W
+        #
+        # Worked examples (target export = 200 W):
+        #   Currently exporting 50 W  → grid = -50 W  → needed = 200 + (-50) = +150 W discharge
+        #   Currently importing 100 W → grid = +100 W → needed = 200 + 100  = +300 W discharge
+        #   Currently exporting 300 W → grid = -300 W → needed = 200 + (-300) = -100 W charge
         target_export_w = target_export_kw * 1000
-        total_power_needed_w = target_export_w + current_load_w
-        battery_power_needed_w = total_power_needed_w - pv_production_w
+        battery_power_needed_w = target_export_w + grid_power_w
         battery_power_needed_kw = battery_power_needed_w / 1000.0
-        
+
+        current_export_w = -grid_power_w  # Positive = currently exporting
         _LOGGER.debug(
-            f"Dynamic Export calculation: "
-            f"Target Export={target_export_w}W, Load={current_load_w}W, "
-            f"Total Needed={total_power_needed_w}W, PV={pv_production_w}W, "
-            f"Battery Needed={battery_power_needed_w}W ({battery_power_needed_kw:.2f}kW)"
+            f"Dynamic Export calculation (grid-based): "
+            f"Target Export={target_export_w:.0f}W, "
+            f"Grid={grid_power_w:.0f}W (export={current_export_w:.0f}W), "
+            f"Battery Needed={battery_power_needed_w:.0f}W ({battery_power_needed_kw:.2f}kW)"
         )
 
         # Check if update is needed (debouncing)
@@ -341,8 +333,8 @@ class DynamicExportManager:
             
             _LOGGER.info(
                 f"Dynamic Export: Discharging battery at {discharge_power_kw:.2f}kW "
-                f"(Target Export={target_export_kw}kW, Load={current_load_w/1000:.2f}kW, "
-                f"PV={pv_production_w/1000:.2f}kW)"
+                f"(Target Export={target_export_kw}kW, "
+                f"Grid={grid_power_w/1000:.2f}kW, Current Export={current_export_w/1000:.2f}kW)"
             )
             
             await self._send_discharge_command(discharge_power_kw, soc_cutoff)
@@ -355,8 +347,8 @@ class DynamicExportManager:
             
             _LOGGER.info(
                 f"Dynamic Export: Charging battery at {charge_power_kw:.2f}kW to absorb excess "
-                f"(Target Export={target_export_kw}kW, Load={current_load_w/1000:.2f}kW, "
-                f"PV={pv_production_w/1000:.2f}kW)"
+                f"(Target Export={target_export_kw}kW, "
+                f"Grid={grid_power_w/1000:.2f}kW, Current Export={current_export_w/1000:.2f}kW)"
             )
             
             await self._send_charge_command(charge_power_kw, 100)  # Charge to 100% SOC
@@ -657,12 +649,25 @@ class DynamicImportManager:
     async def _update_battery_power(self) -> None:
         """Calculate required battery charge/discharge and send command.
 
-        Target import T (kW, positive = drawing from grid):
-            battery_charge_needed = (PV − Load) + T
+        GRID-BASED CALCULATION:
+        The grid meter provides a complete, system-wide view of net power flow,
+        incorporating all inverters (including any follower not visible via Modbus).
+        This makes house load and PV measurements unnecessary for control purposes.
 
-        Positive result → charge battery (absorbs PV surplus AND draws T from grid).
-        Negative result → discharge battery (PV is insufficient to reach target import
-                          even with battery help — unusual but handled gracefully).
+        Sign convention for grid_power_total (from register 0x0021H):
+            positive → importing from grid
+            negative → exporting to grid
+
+        To reach a target import level T (positive kW):
+            error = T - grid_power_total
+            battery_charge_needed = error
+              > 0 → charge more (grid is not importing enough, battery must absorb more)
+              < 0 → discharge more (grid is importing too much, battery should offset it)
+
+        Worked examples (target import = 500 W):
+            Currently importing 200 W → grid = +200 W → needed = 500 - 200 = +300 W charge
+            Currently importing 700 W → grid = +700 W → needed = 500 - 700 = -200 W discharge
+            Currently exporting 100 W → grid = -100 W → needed = 500 - (-100) = +600 W charge
         """
         data = self._coordinator.data
 
@@ -692,40 +697,25 @@ class DynamicImportManager:
             self._last_update_time = dt_util.now()
             return
 
-        # ── House load ───────────────────────────────────────────────────────
-        if COMBINED_HOUSE_LOAD in data and data[COMBINED_HOUSE_LOAD] is not None:
-            current_load_w = data[COMBINED_HOUSE_LOAD]
-            _LOGGER.debug(f"Dynamic Import: using combined_house_load={current_load_w}W")
-        else:
-            current_load_w = data.get("total_house_load")
-            _LOGGER.debug(f"Dynamic Import: using total_house_load={current_load_w}W (no follower)")
-
-        if current_load_w is None:
-            _LOGGER.warning("Cannot calculate Dynamic Import - house load unavailable")
+        # ── Grid power (signed, W) ────────────────────────────────────────────
+        # grid_power_total: positive = importing, negative = exporting.
+        # This is the authoritative system-wide measurement — it accounts for
+        # all inverters, house load and PV without needing to read them separately.
+        grid_power_w = data.get("grid_power_total")
+        if grid_power_w is None:
+            _LOGGER.warning("Cannot calculate Dynamic Import — grid_power_total unavailable")
             return
 
-        # ── PV power ─────────────────────────────────────────────────────────
-        if COMBINED_PV_POWER in data and data[COMBINED_PV_POWER] is not None:
-            pv_production_w = data[COMBINED_PV_POWER]
-        else:
-            pv_production_w = data.get("pv_power_total", 0)
-
-        if pv_production_w is None:
-            pv_production_w = 0
-            _LOGGER.debug("PV power sensor unavailable, assuming 0W")
-
         # ── Core calculation ─────────────────────────────────────────────────
-        # battery_charge_needed = (PV − Load) + Target Import
-        #   > 0  → charge battery at this rate (imports target from grid)
-        #   < 0  → PV alone exceeds load + target; discharge to prevent over-export
+        # battery_charge_needed = target_import_W - grid_power_total_W
         target_import_w = target_import_kw * 1000
-        battery_charge_needed_w = (pv_production_w - current_load_w) + target_import_w
+        battery_charge_needed_w = target_import_w - grid_power_w
         battery_charge_needed_kw = battery_charge_needed_w / 1000.0
 
         _LOGGER.debug(
-            f"Dynamic Import calculation: "
-            f"Target Import={target_import_w:.0f}W, Load={current_load_w:.0f}W, "
-            f"PV={pv_production_w:.0f}W, "
+            f"Dynamic Import calculation (grid-based): "
+            f"Target Import={target_import_w:.0f}W, "
+            f"Grid={grid_power_w:.0f}W, "
             f"Battery Charge Needed={battery_charge_needed_w:.0f}W "
             f"({battery_charge_needed_kw:.2f}kW)"
         )
@@ -758,8 +748,7 @@ class DynamicImportManager:
 
             _LOGGER.info(
                 f"Dynamic Import: Charging battery at {charge_power_kw:.2f}kW "
-                f"(Target Import={target_import_kw}kW, Load={current_load_w/1000:.2f}kW, "
-                f"PV={pv_production_w/1000:.2f}kW)"
+                f"(Target Import={target_import_kw}kW, Grid={grid_power_w/1000:.2f}kW)"
             )
 
             await self._send_charge_command(charge_power_kw, soc_target)
@@ -771,9 +760,8 @@ class DynamicImportManager:
 
             _LOGGER.info(
                 f"Dynamic Import: Discharging battery at {discharge_power_kw:.2f}kW "
-                f"to absorb PV surplus and maintain target import "
-                f"(Target Import={target_import_kw}kW, Load={current_load_w/1000:.2f}kW, "
-                f"PV={pv_production_w/1000:.2f}kW)"
+                f"to reduce grid import to target "
+                f"(Target Import={target_import_kw}kW, Grid={grid_power_w/1000:.2f}kW)"
             )
 
             # Use dispatch_discharge_soc as the floor for this discharge
