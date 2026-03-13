@@ -34,6 +34,7 @@ from .const import (
     MAX_SOC_REGISTER,
     MIN_SOC_REGISTER,
     COMBINED_BATTERY_SOC,
+    COMBINED_BATTERY_POWER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -287,43 +288,54 @@ class DynamicExportManager:
             _LOGGER.warning("Cannot calculate Dynamic Export — grid_power_total unavailable")
             return
 
-        # ── Core calculation — grid-error delta ──────────────────────────────
-        # We use only grid_power_total (no battery reading needed — works on
-        # single-inverter setups where only the host is visible via Modbus).
+        # ── Core calculation ──────────────────────────────────────────────────
+        # Two methods depending on whether follower battery data is available:
         #
-        # The grid error tells us how far the current export is from target.
-        # We apply that error as a DELTA to the last commanded power, capped by
-        # the slew limit.  This avoids the cancel-then-ramp problem: when the
-        # battery is already discharging and the grid is near target, the error
-        # is ~zero so the command barely changes — it holds the working level.
+        # METHOD A — Host+Follower (COMBINED_BATTERY_POWER present):
+        #   Uses actual combined battery output as baseline, applies grid error as delta.
+        #   new_cmd = current_battery_power + grid_error
+        #   More accurate because it knows exactly what the batteries are doing.
+        #
+        # METHOD B — Host only (no follower data):
+        #   Uses last commanded power as baseline, applies grid error as delta.
+        #   new_cmd = last_commanded + clamp(grid_error, ±MAX_STEP)
+        #   Safe because it never jumps more than MAX_STEP per cycle regardless
+        #   of what the inverter actually did with the previous command.
+        #
+        # Both methods: grid_error = grid_power_w + target_export_w
+        #   positive error → need more discharge
+        #   negative error → exporting too much, ease off
         #
         # Sign convention: grid positive = importing, negative = exporting.
-        #   grid_error = grid_power_w + target_export_w
-        #   (positive error → need more discharge; negative → too much, ease off)
-        #
-        # Examples (target = 5000 W export):
-        #   LastCmd=0kW,   Grid=+200W  → error=+5200W → delta=+1kW → cmd=1kW  (ramp)
-        #   LastCmd=1kW,   Grid=-3800W → error=+1200W → delta=+1kW → cmd=2kW  (ramp)
-        #   LastCmd=5kW,   Grid=-5000W → error=0W     → delta=0W   → cmd=5kW  (hold)
-        #   LastCmd=5kW,   Grid=-6000W → error=-1000W → delta=-1kW → cmd=4kW  (trim)
         target_export_w = target_export_kw * 1000
         grid_error_w = grid_power_w + target_export_w
         grid_error_kw = grid_error_w / 1000.0
+        current_export_w = -grid_power_w
 
-        # Delta-clamp: step toward the error, bounded by slew limit
-        delta_kw = max(-DYNAMIC_EXPORT_MAX_STEP_KW, min(DYNAMIC_EXPORT_MAX_STEP_KW, grid_error_kw))
-        battery_power_needed_kw = self._last_commanded_power_kw + delta_kw
-
-        current_export_w = -grid_power_w  # positive = currently exporting
-        _LOGGER.debug(
-            f"Dynamic Export calculation: "
-            f"Target={target_export_w:.0f}W, "
-            f"Grid={grid_power_w:.0f}W, "
-            f"GridError={grid_error_w:.0f}W, "
-            f"LastCmd={self._last_commanded_power_kw:.2f}kW, "
-            f"Delta={delta_kw:.2f}kW, "
-            f"BatteryNeeded={battery_power_needed_kw:.2f}kW"
+        combined_battery_w = data.get(COMBINED_BATTERY_POWER)
+        has_follower = (
+            self._coordinator.follower_coordinator is not None
+            and bool(self._coordinator.follower_coordinator.data)
         )
+        if has_follower and combined_battery_w is not None:
+            # Method A: follower data available — use actual battery power as baseline
+            battery_power_needed_kw = (combined_battery_w + grid_error_w) / 1000.0
+            _LOGGER.debug(
+                f"Dynamic Export [Method A — host+follower]: "
+                f"Target={target_export_w:.0f}W, Grid={grid_power_w:.0f}W, "
+                f"GridError={grid_error_w:.0f}W, CombinedBattery={combined_battery_w:.0f}W, "
+                f"BatteryNeeded={battery_power_needed_kw:.2f}kW"
+            )
+        else:
+            # Method B: host only — step from last commanded power
+            delta_kw = max(-DYNAMIC_EXPORT_MAX_STEP_KW, min(DYNAMIC_EXPORT_MAX_STEP_KW, grid_error_kw))
+            battery_power_needed_kw = self._last_commanded_power_kw + delta_kw
+            _LOGGER.debug(
+                f"Dynamic Export [Method B — host only]: "
+                f"Target={target_export_w:.0f}W, Grid={grid_power_w:.0f}W, "
+                f"GridError={grid_error_w:.0f}W, LastCmd={self._last_commanded_power_kw:.2f}kW, "
+                f"Delta={delta_kw:.2f}kW, BatteryNeeded={battery_power_needed_kw:.2f}kW"
+            )
 
         # ── Settle timer ─────────────────────────────────────────────────────
         # After sending any command, wait DYNAMIC_EXPORT_SETTLE_SECONDS before
@@ -721,34 +733,41 @@ class DynamicImportManager:
             _LOGGER.warning("Cannot calculate Dynamic Import — grid_power_total unavailable")
             return
 
-        # ── Core calculation — grid-error delta ──────────────────────────────
-        # Uses only grid_power_total — no battery reading needed.
-        # Mirror of export logic: apply grid error as a delta to last commanded power.
+        # ── Core calculation ──────────────────────────────────────────────────
+        # Dual-mode mirroring export logic — see export manager for full commentary.
         #
-        #   grid_error = grid_power_w - target_import_w
-        #   (positive → importing too much → charge battery more)
-        #   (negative → not importing enough/exporting → ease off charge)
-        #
-        # Examples (target = 500 W import):
-        #   LastCmd=0kW,   Grid=+1500W → error=+1000W → delta=+1kW → cmd=1kW  (ramp)
-        #   LastCmd=1kW,   Grid=+500W  → error=0W     → delta=0W   → cmd=1kW  (hold)
-        #   LastCmd=1kW,   Grid=-200W  → error=-700W  → delta=-0.7kW→cmd=0.3kW(ease off)
+        # For import mode: grid_error = grid_power_w - target_import_w
+        #   positive error → importing too much → charge battery more to absorb
+        #   negative error → not importing enough → ease off charge
         target_import_w = target_import_kw * 1000
         grid_error_w = grid_power_w - target_import_w
         grid_error_kw = grid_error_w / 1000.0
 
-        delta_kw = max(-DYNAMIC_EXPORT_MAX_STEP_KW, min(DYNAMIC_EXPORT_MAX_STEP_KW, grid_error_kw))
-        battery_charge_needed_kw = self._last_commanded_power_kw + delta_kw
-
-        _LOGGER.debug(
-            f"Dynamic Import calculation: "
-            f"Target={target_import_w:.0f}W, "
-            f"Grid={grid_power_w:.0f}W, "
-            f"GridError={grid_error_w:.0f}W, "
-            f"LastCmd={self._last_commanded_power_kw:.2f}kW, "
-            f"Delta={delta_kw:.2f}kW, "
-            f"ChargeNeeded={battery_charge_needed_kw:.2f}kW"
+        combined_battery_w = data.get(COMBINED_BATTERY_POWER)
+        has_follower = (
+            self._coordinator.follower_coordinator is not None
+            and bool(self._coordinator.follower_coordinator.data)
         )
+        if has_follower and combined_battery_w is not None:
+            # Method A: follower data available — use actual combined battery power as baseline.
+            # Import mode charges battery (negative battery_power), so negate for charge sense.
+            battery_charge_needed_kw = (-combined_battery_w + grid_error_w) / 1000.0
+            _LOGGER.debug(
+                f"Dynamic Import [Method A — host+follower]: "
+                f"Target={target_import_w:.0f}W, Grid={grid_power_w:.0f}W, "
+                f"GridError={grid_error_w:.0f}W, CombinedBattery={combined_battery_w:.0f}W, "
+                f"ChargeNeeded={battery_charge_needed_kw:.2f}kW"
+            )
+        else:
+            # Method B: host only — step from last commanded power
+            delta_kw = max(-DYNAMIC_EXPORT_MAX_STEP_KW, min(DYNAMIC_EXPORT_MAX_STEP_KW, grid_error_kw))
+            battery_charge_needed_kw = self._last_commanded_power_kw + delta_kw
+            _LOGGER.debug(
+                f"Dynamic Import [Method B — host only]: "
+                f"Target={target_import_w:.0f}W, Grid={grid_power_w:.0f}W, "
+                f"GridError={grid_error_w:.0f}W, LastCmd={self._last_commanded_power_kw:.2f}kW, "
+                f"Delta={delta_kw:.2f}kW, ChargeNeeded={battery_charge_needed_kw:.2f}kW"
+            )
 
         # ── Settle timer ─────────────────────────────────────────────────────
         now = dt_util.now()
