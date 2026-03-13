@@ -30,8 +30,9 @@ CONF_DYNAMIC_EXPORT_TARGET = "dynamic_export_target"
 DEFAULT_DYNAMIC_EXPORT_TARGET = 0.05  # 50W default — gentle trickle to stay on export side
 DYNAMIC_EXPORT_MIN_POWER = 0.05       # 50W minimum — allows zero-import bias correction
 DYNAMIC_EXPORT_MAX_POWER = 15.0  # 15kW max to support extended system configurations
-DYNAMIC_EXPORT_UPDATE_INTERVAL = 10  # seconds between power adjustments
-DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD = 0.3  # kW - only update if change > this
+DYNAMIC_EXPORT_UPDATE_INTERVAL = 10  # seconds — control loop poll rate (do not raise)
+DYNAMIC_EXPORT_SETTLE_SECONDS = 30   # seconds to wait after a command before adjusting again
+DYNAMIC_EXPORT_MAX_STEP_KW = 1.0     # kW — max power change per adjustment step
 
 # SOC (State of Charge) conversion constants
 # FIXED: According to Modbus protocol, dispatch SOC uses full 8-bit range (0-255)

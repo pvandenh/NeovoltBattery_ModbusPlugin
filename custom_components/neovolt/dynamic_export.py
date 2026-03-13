@@ -25,9 +25,10 @@ from .const import (
     DISPATCH_MODE_DYNAMIC_EXPORT,
     DISPATCH_MODE_DYNAMIC_IMPORT,
     DISPATCH_MODE_POWER_WITH_SOC,
-    DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD,
     DYNAMIC_EXPORT_MIN_POWER,
     DYNAMIC_EXPORT_UPDATE_INTERVAL,
+    DYNAMIC_EXPORT_SETTLE_SECONDS,
+    DYNAMIC_EXPORT_MAX_STEP_KW,
     MODBUS_OFFSET,
     SOC_CONVERSION_FACTOR,
     MAX_SOC_REGISTER,
@@ -109,6 +110,7 @@ class DynamicExportManager:
         self._task: Optional[asyncio.Task] = None
         self._last_update_time: Optional[datetime] = None
         self._last_grid_power_w: Optional[float] = None  # Last grid reading used for debounce
+        self._last_commanded_power_kw: float = 0.0       # Last power sent — used for slew limiting
         self._start_time: Optional[datetime] = None
         self._duration_minutes: Optional[int] = None
 
@@ -158,6 +160,7 @@ class DynamicExportManager:
         self._running = True
         self._last_update_time = None
         self._last_grid_power_w = None
+        self._last_commanded_power_kw = 0.0
         self._start_time = dt_util.now()
         self._duration_minutes = duration_minutes
 
@@ -272,6 +275,7 @@ class DynamicExportManager:
             )
             await self._send_standby_command()
             self._last_grid_power_w = None
+            self._last_commanded_power_kw = 0.0
             self._last_update_time = dt_util.now()
             return
 
@@ -283,76 +287,95 @@ class DynamicExportManager:
             _LOGGER.warning("Cannot calculate Dynamic Export — grid_power_total unavailable")
             return
 
-        # ── Core calculation ──────────────────────────────────────────────────
+        # ── Core calculation — grid-error delta ──────────────────────────────
+        # We use only grid_power_total (no battery reading needed — works on
+        # single-inverter setups where only the host is visible via Modbus).
+        #
+        # The grid error tells us how far the current export is from target.
+        # We apply that error as a DELTA to the last commanded power, capped by
+        # the slew limit.  This avoids the cancel-then-ramp problem: when the
+        # battery is already discharging and the grid is near target, the error
+        # is ~zero so the command barely changes — it holds the working level.
+        #
+        # Sign convention: grid positive = importing, negative = exporting.
+        #   grid_error = grid_power_w + target_export_w
+        #   (positive error → need more discharge; negative → too much, ease off)
+        #
+        # Examples (target = 5000 W export):
+        #   LastCmd=0kW,   Grid=+200W  → error=+5200W → delta=+1kW → cmd=1kW  (ramp)
+        #   LastCmd=1kW,   Grid=-3800W → error=+1200W → delta=+1kW → cmd=2kW  (ramp)
+        #   LastCmd=5kW,   Grid=-5000W → error=0W     → delta=0W   → cmd=5kW  (hold)
+        #   LastCmd=5kW,   Grid=-6000W → error=-1000W → delta=-1kW → cmd=4kW  (trim)
         target_export_w = target_export_kw * 1000
-        battery_power_needed_w = target_export_w + grid_power_w
-        battery_power_needed_kw = battery_power_needed_w / 1000.0
+        grid_error_w = grid_power_w + target_export_w
+        grid_error_kw = grid_error_w / 1000.0
+
+        # Delta-clamp: step toward the error, bounded by slew limit
+        delta_kw = max(-DYNAMIC_EXPORT_MAX_STEP_KW, min(DYNAMIC_EXPORT_MAX_STEP_KW, grid_error_kw))
+        battery_power_needed_kw = self._last_commanded_power_kw + delta_kw
 
         current_export_w = -grid_power_w  # positive = currently exporting
         _LOGGER.debug(
-            f"Dynamic Export calculation (grid-based): "
-            f"Target Export={target_export_w:.0f}W, "
-            f"Grid={grid_power_w:.0f}W (current export={current_export_w:.0f}W), "
-            f"Battery Needed={battery_power_needed_w:.0f}W ({battery_power_needed_kw:.2f}kW)"
+            f"Dynamic Export calculation: "
+            f"Target={target_export_w:.0f}W, "
+            f"Grid={grid_power_w:.0f}W, "
+            f"GridError={grid_error_w:.0f}W, "
+            f"LastCmd={self._last_commanded_power_kw:.2f}kW, "
+            f"Delta={delta_kw:.2f}kW, "
+            f"BatteryNeeded={battery_power_needed_kw:.2f}kW"
         )
 
-        # ── Debounce on grid reading change, not battery command ─────────────
-        # Comparing grid readings suppresses redundant commands once the battery
-        # has already responded and the grid has settled near the target.
+        # ── Settle timer ─────────────────────────────────────────────────────
+        # After sending any command, wait DYNAMIC_EXPORT_SETTLE_SECONDS before
+        # adjusting again. This gives the inverter time to actually ramp to the
+        # commanded power and the grid meter time to reflect the change, preventing
+        # the staircase oscillation caused by re-commanding before the hardware responds.
         now = dt_util.now()
-        time_since_update = None
-        if self._last_update_time:
-            time_since_update = (now - self._last_update_time).total_seconds()
-
-        grid_change_kw = (
-            abs(grid_power_w - self._last_grid_power_w) / 1000.0
-            if self._last_grid_power_w is not None
-            else float("inf")
+        seconds_since_command = (
+            (now - self._last_update_time).total_seconds()
+            if self._last_update_time else float("inf")
         )
 
-        should_update = (
-            grid_change_kw >= DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD
-            or time_since_update is None
-            or time_since_update >= 60
-        )
-
-        if not should_update:
+        if seconds_since_command < DYNAMIC_EXPORT_SETTLE_SECONDS:
             _LOGGER.debug(
-                f"Skipping Dynamic Export update — grid change {grid_change_kw:.2f}kW "
-                f"below threshold {DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD}kW, "
-                f"last update {time_since_update:.0f}s ago"
+                f"Dynamic Export: Waiting for inverter to settle — "
+                f"{seconds_since_command:.0f}s since last command "
+                f"(settle period={DYNAMIC_EXPORT_SETTLE_SECONDS}s), "
+                f"current grid={grid_power_w/1000:.2f}kW"
             )
             return
 
         # ── Send command ──────────────────────────────────────────────────────
         if battery_power_needed_kw > DYNAMIC_EXPORT_MIN_POWER:
             discharge_power_kw = min(battery_power_needed_kw, self._max_discharge_power)
+            discharge_power_kw = max(discharge_power_kw, DYNAMIC_EXPORT_MIN_POWER)
             _LOGGER.info(
                 f"Dynamic Export: Discharging battery at {discharge_power_kw:.2f}kW "
-                f"(Target Export={target_export_kw}kW, "
-                f"Grid={grid_power_w/1000:.2f}kW, Current Export={current_export_w/1000:.2f}kW)"
+                f"(Grid={grid_power_w/1000:.2f}kW, Export={current_export_w/1000:.2f}kW, "
+                f"Target={target_export_kw:.2f}kW)"
             )
             await self._send_discharge_command(discharge_power_kw, soc_cutoff)
+            self._last_commanded_power_kw = discharge_power_kw
 
         elif battery_power_needed_kw < -DYNAMIC_EXPORT_MIN_POWER:
             charge_power_kw = min(abs(battery_power_needed_kw), self._max_charge_power)
+            charge_power_kw = max(charge_power_kw, DYNAMIC_EXPORT_MIN_POWER)
             _LOGGER.info(
                 f"Dynamic Export: Charging battery at {charge_power_kw:.2f}kW to absorb excess "
-                f"(Target Export={target_export_kw}kW, "
-                f"Grid={grid_power_w/1000:.2f}kW, Current Export={current_export_w/1000:.2f}kW)"
+                f"(Grid={grid_power_w/1000:.2f}kW, Export={current_export_w/1000:.2f}kW, "
+                f"Target={target_export_kw:.2f}kW)"
             )
             await self._send_charge_command(charge_power_kw, 100)
+            self._last_commanded_power_kw = -charge_power_kw
 
         else:
             _LOGGER.info(
                 f"Dynamic Export: Within tolerance "
-                f"(Battery needed={battery_power_needed_kw:.2f}kW, "
-                f"Grid={grid_power_w/1000:.2f}kW). Sending standby command."
+                f"(Grid={grid_power_w/1000:.2f}kW, Target={target_export_kw:.2f}kW)"
             )
             await self._send_standby_command()
+            self._last_commanded_power_kw = 0.0
 
-        # Record the grid reading used this cycle
-        self._last_grid_power_w = grid_power_w
         self._last_update_time = now
 
     async def _send_discharge_command(self, power_kw: float, soc_cutoff: int) -> None:
@@ -526,6 +549,7 @@ class DynamicImportManager:
         self._task: Optional[asyncio.Task] = None
         self._last_update_time: Optional[datetime] = None
         self._last_grid_power_w: Optional[float] = None  # Last grid reading used for debounce
+        self._last_commanded_power_kw: float = 0.0       # Last power sent — used for slew limiting
         self._start_time: Optional[datetime] = None
         self._duration_minutes: Optional[int] = None
 
@@ -574,6 +598,7 @@ class DynamicImportManager:
         self._running = True
         self._last_update_time = None
         self._last_grid_power_w = None
+        self._last_commanded_power_kw = 0.0
         self._start_time = dt_util.now()
         self._duration_minutes = duration_minutes
 
@@ -684,6 +709,7 @@ class DynamicImportManager:
             )
             await self._send_standby_command()
             self._last_grid_power_w = None
+            self._last_commanded_power_kw = 0.0
             self._last_update_time = dt_util.now()
             return
 
@@ -695,60 +721,69 @@ class DynamicImportManager:
             _LOGGER.warning("Cannot calculate Dynamic Import — grid_power_total unavailable")
             return
 
-        # ── Core calculation ─────────────────────────────────────────────────
+        # ── Core calculation — grid-error delta ──────────────────────────────
+        # Uses only grid_power_total — no battery reading needed.
+        # Mirror of export logic: apply grid error as a delta to last commanded power.
+        #
+        #   grid_error = grid_power_w - target_import_w
+        #   (positive → importing too much → charge battery more)
+        #   (negative → not importing enough/exporting → ease off charge)
+        #
+        # Examples (target = 500 W import):
+        #   LastCmd=0kW,   Grid=+1500W → error=+1000W → delta=+1kW → cmd=1kW  (ramp)
+        #   LastCmd=1kW,   Grid=+500W  → error=0W     → delta=0W   → cmd=1kW  (hold)
+        #   LastCmd=1kW,   Grid=-200W  → error=-700W  → delta=-0.7kW→cmd=0.3kW(ease off)
         target_import_w = target_import_kw * 1000
-        battery_charge_needed_w = target_import_w - grid_power_w
-        battery_charge_needed_kw = battery_charge_needed_w / 1000.0
+        grid_error_w = grid_power_w - target_import_w
+        grid_error_kw = grid_error_w / 1000.0
+
+        delta_kw = max(-DYNAMIC_EXPORT_MAX_STEP_KW, min(DYNAMIC_EXPORT_MAX_STEP_KW, grid_error_kw))
+        battery_charge_needed_kw = self._last_commanded_power_kw + delta_kw
 
         _LOGGER.debug(
-            f"Dynamic Import calculation (grid-based): "
-            f"Target Import={target_import_w:.0f}W, "
+            f"Dynamic Import calculation: "
+            f"Target={target_import_w:.0f}W, "
             f"Grid={grid_power_w:.0f}W, "
-            f"Battery Charge Needed={battery_charge_needed_w:.0f}W "
-            f"({battery_charge_needed_kw:.2f}kW)"
+            f"GridError={grid_error_w:.0f}W, "
+            f"LastCmd={self._last_commanded_power_kw:.2f}kW, "
+            f"Delta={delta_kw:.2f}kW, "
+            f"ChargeNeeded={battery_charge_needed_kw:.2f}kW"
         )
 
-        # ── Debounce on grid reading change, not battery command ─────────────
+        # ── Settle timer ─────────────────────────────────────────────────────
         now = dt_util.now()
-        time_since_update = None
-        if self._last_update_time:
-            time_since_update = (now - self._last_update_time).total_seconds()
-
-        grid_change_kw = (
-            abs(grid_power_w - self._last_grid_power_w) / 1000.0
-            if self._last_grid_power_w is not None
-            else float("inf")
+        seconds_since_command = (
+            (now - self._last_update_time).total_seconds()
+            if self._last_update_time else float("inf")
         )
 
-        should_update = (
-            grid_change_kw >= DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD
-            or time_since_update is None
-            or time_since_update >= 60
-        )
-
-        if not should_update:
+        if seconds_since_command < DYNAMIC_EXPORT_SETTLE_SECONDS:
             _LOGGER.debug(
-                f"Skipping Dynamic Import update — grid change {grid_change_kw:.2f}kW "
-                f"below threshold {DYNAMIC_EXPORT_DEBOUNCE_THRESHOLD}kW, "
-                f"last update {time_since_update:.0f}s ago"
+                f"Dynamic Import: Waiting for inverter to settle — "
+                f"{seconds_since_command:.0f}s since last command "
+                f"(settle period={DYNAMIC_EXPORT_SETTLE_SECONDS}s), "
+                f"current grid={grid_power_w/1000:.2f}kW"
             )
             return
 
         # ── Send command ─────────────────────────────────────────────────────
         if battery_charge_needed_kw > DYNAMIC_EXPORT_MIN_POWER:
             charge_power_kw = min(battery_charge_needed_kw, self._max_charge_power)
+            charge_power_kw = max(charge_power_kw, DYNAMIC_EXPORT_MIN_POWER)
             _LOGGER.info(
                 f"Dynamic Import: Charging battery at {charge_power_kw:.2f}kW "
-                f"(Target Import={target_import_kw}kW, Grid={grid_power_w/1000:.2f}kW)"
+                f"(Grid={grid_power_w/1000:.2f}kW, Target={target_import_kw:.2f}kW)"
             )
             await self._send_charge_command(charge_power_kw, soc_target)
+            self._last_commanded_power_kw = charge_power_kw
 
         elif battery_charge_needed_kw < -DYNAMIC_EXPORT_MIN_POWER:
             discharge_power_kw = min(abs(battery_charge_needed_kw), self._max_discharge_power)
+            discharge_power_kw = max(discharge_power_kw, DYNAMIC_EXPORT_MIN_POWER)
             _LOGGER.info(
                 f"Dynamic Import: Discharging battery at {discharge_power_kw:.2f}kW "
                 f"to reduce grid import to target "
-                f"(Target Import={target_import_kw}kW, Grid={grid_power_w/1000:.2f}kW)"
+                f"(Grid={grid_power_w/1000:.2f}kW, Target={target_import_kw:.2f}kW)"
             )
             soc_floor = int(safe_get_entity_float(
                 self._hass,
@@ -756,17 +791,17 @@ class DynamicImportManager:
                 10.0,
             ))
             await self._send_discharge_command(discharge_power_kw, soc_floor)
+            self._last_commanded_power_kw = -discharge_power_kw
 
         else:
             _LOGGER.info(
                 f"Dynamic Import: Within tolerance "
-                f"(Battery needed={battery_charge_needed_kw:.2f}kW, "
-                f"Grid={grid_power_w/1000:.2f}kW). Sending standby command."
+                f"(Grid={grid_power_w/1000:.2f}kW, Target={target_import_kw:.2f}kW)"
             )
             await self._send_standby_command()
+            self._last_commanded_power_kw = 0.0
 
-        # Record the grid reading used this cycle
-        self._last_grid_power_w = grid_power_w
+        # Record time of this command for settle timer
         self._last_update_time = now
 
     async def _send_charge_command(self, power_kw: float, soc_target: int) -> None:
