@@ -7,7 +7,7 @@
   "documentation": "https://github.com/pvandenh/Neovolt-Modbus",
   "iot_class": "local_polling",
   "requirements": ["pymodbus>=3.10.0"],
-  "version": "2.0.0",
+  "version": "2",
   "integration_type": "device",
   "loggers": ["custom_components.neovolt"]
 }
