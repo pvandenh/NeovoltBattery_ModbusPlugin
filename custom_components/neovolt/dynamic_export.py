@@ -734,11 +734,29 @@ class DynamicImportManager:
             return
 
         # ── Core calculation ──────────────────────────────────────────────────
-        # Dual-mode mirroring export logic — see export manager for full commentary.
+        # grid_error = grid_power_w - target_import_w
+        #   positive → importing more than target → ease off (less charge / more discharge)
+        #   negative → importing less than target (or exporting) → charge more
         #
-        # For import mode: grid_error = grid_power_w - target_import_w
-        #   positive error → importing too much → charge battery more to absorb
-        #   negative error → not importing enough → ease off charge
+        # Two methods depending on follower availability:
+        #
+        # METHOD A — Host+Follower (combined_battery_w available and accurate):
+        #   Uses actual combined battery output as baseline.
+        #   current charge power = -combined_battery_w  (battery sign flipped: charge=negative)
+        #   new charge = current charge + (-grid_error)  (negate: neg error → more charge)
+        #   → battery_charge_needed = (-combined_battery_w - grid_error_w) / 1000
+        #
+        #   Verify (grid=-6815W, target=12100W, battery=+9917W discharging):
+        #     grid_error = -6815 - 12100 = -18915W
+        #     charge_needed = (-9917 - (-18915)) / 1000 = +9.0kW charge ✓
+        #
+        #   Steady state (grid=+12100W, battery=-6000W charging):
+        #     grid_error = 0W → charge_needed = (6000 - 0) / 1000 = +6kW (holds) ✓
+        #
+        # METHOD B — Host only:
+        #   No reliable battery baseline — step from last commanded power instead.
+        #   Negate grid_error for delta: negative error → positive delta (more charge).
+        #   → battery_charge_needed = last_commanded + clamp(-grid_error, ±MAX_STEP)
         target_import_w = target_import_kw * 1000
         grid_error_w = grid_power_w - target_import_w
         grid_error_kw = grid_error_w / 1000.0
@@ -749,9 +767,8 @@ class DynamicImportManager:
             and bool(self._coordinator.follower_coordinator.data)
         )
         if has_follower and combined_battery_w is not None:
-            # Method A: follower data available — use actual combined battery power as baseline.
-            # Import mode charges battery (negative battery_power), so negate for charge sense.
-            battery_charge_needed_kw = (-combined_battery_w + grid_error_w) / 1000.0
+            # Method A: accurate baseline from actual combined battery output
+            battery_charge_needed_kw = (-combined_battery_w - grid_error_w) / 1000.0
             _LOGGER.debug(
                 f"Dynamic Import [Method A — host+follower]: "
                 f"Target={target_import_w:.0f}W, Grid={grid_power_w:.0f}W, "
@@ -760,7 +777,7 @@ class DynamicImportManager:
             )
         else:
             # Method B: host only — step from last commanded power
-            delta_kw = max(-DYNAMIC_EXPORT_MAX_STEP_KW, min(DYNAMIC_EXPORT_MAX_STEP_KW, grid_error_kw))
+            delta_kw = max(-DYNAMIC_EXPORT_MAX_STEP_KW, min(DYNAMIC_EXPORT_MAX_STEP_KW, -grid_error_kw))
             battery_charge_needed_kw = self._last_commanded_power_kw + delta_kw
             _LOGGER.debug(
                 f"Dynamic Import [Method B — host only]: "
