@@ -520,8 +520,8 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         """Return human-readable dispatch status."""
-        from .const import DISPATCH_MODE_DYNAMIC_EXPORT
-        
+        from .const import DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT
+
         data = self.coordinator.data
         dispatch_start = data.get("dispatch_start", 0)
 
@@ -539,21 +539,21 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
         if dispatch_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
             # Get current load and target for Dynamic Export
             load = data.get("total_house_load", 0)
-            
+
             # Try to get target export value
             try:
                 from .select import safe_get_entity_float
                 target = safe_get_entity_float(
                     self.hass,
-                    f"number.neovolt_{self._device_name}_dynamic_export_target",
+                    f"number.neovolt_{self._device_name}_dynamic_mode_power_target",
                     1.0
                 )
                 mode = f"Dynamic Export (Load: {load/1000:.1f}kW + {target:.1f}kW)"
                 power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
-            except:
+            except Exception:
                 mode = "Dynamic Export"
                 power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
-            
+
             # For Dynamic Export, get time remaining from the manager
             if hasattr(self.coordinator, 'dynamic_export_manager'):
                 manager = self.coordinator.dynamic_export_manager
@@ -561,6 +561,30 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
                     elapsed_minutes = (dt_util.now() - manager._start_time).total_seconds() / 60.0
                     remaining_minutes = max(0, manager._duration_minutes - elapsed_minutes)
                     dispatch_time = int(remaining_minutes * 60)  # Convert to seconds
+
+        elif dispatch_mode == DISPATCH_MODE_DYNAMIC_IMPORT:
+            # Get target import value
+            try:
+                from .select import safe_get_entity_float
+                target = safe_get_entity_float(
+                    self.hass,
+                    f"number.neovolt_{self._device_name}_dynamic_mode_power_target",
+                    1.0
+                )
+                mode = f"Dynamic Import (Target: {target:.1f}kW from grid)"
+                power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
+            except Exception:
+                mode = "Dynamic Import"
+                power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
+
+            # Get time remaining from the import manager
+            if hasattr(self.coordinator, 'dynamic_import_manager'):
+                manager = self.coordinator.dynamic_import_manager
+                if manager.is_running and manager._start_time and manager._duration_minutes:
+                    elapsed_minutes = (dt_util.now() - manager._start_time).total_seconds() / 60.0
+                    remaining_minutes = max(0, manager._duration_minutes - elapsed_minutes)
+                    dispatch_time = int(remaining_minutes * 60)  # Convert to seconds
+
         elif dispatch_mode == 1:
             mode = "Battery PV Only"
         elif dispatch_mode == 3:
@@ -582,13 +606,14 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
         else:
             mode = f"Mode {dispatch_mode}"
 
-        # Build status string
-        if power_kw and dispatch_mode != DISPATCH_MODE_DYNAMIC_EXPORT:
+        # Build status string — suppress power display for dynamic modes (they show their own context)
+        dynamic_modes = (DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT)
+        if power_kw and dispatch_mode not in dynamic_modes:
             status = f"{mode} @ {power_kw:.1f}kW"
         else:
             status = mode
 
-        # Add time remaining (shown for all modes including Dynamic Export now)
+        # Add time remaining (shown for all modes including dynamic ones)
         if dispatch_time > 0:
             hours = dispatch_time // 3600
             minutes = (dispatch_time % 3600) // 60
@@ -602,8 +627,8 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         """Return detailed dispatch state as attributes."""
-        from .const import DISPATCH_MODE_DYNAMIC_EXPORT
-        
+        from .const import DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT
+
         data = self.coordinator.data
         attrs = {
             "dispatch_active": data.get("dispatch_start", 0) == 1,
@@ -612,13 +637,21 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
             "dispatch_soc_value": data.get("dispatch_soc", 0),
             "dispatch_time_remaining_s": data.get("dispatch_time_remaining", 0),
         }
-        
+
+        current_mode = data.get("dispatch_mode", 0)
+
         # Add Dynamic Export specific attributes
-        if data.get("dispatch_mode", 0) == DISPATCH_MODE_DYNAMIC_EXPORT:
+        if current_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
             attrs["dynamic_export_active"] = True
             if hasattr(self.coordinator, 'dynamic_export_manager'):
                 attrs["dynamic_export_running"] = self.coordinator.dynamic_export_manager.is_running
-        
+
+        # Add Dynamic Import specific attributes
+        elif current_mode == DISPATCH_MODE_DYNAMIC_IMPORT:
+            attrs["dynamic_import_active"] = True
+            if hasattr(self.coordinator, 'dynamic_import_manager'):
+                attrs["dynamic_import_running"] = self.coordinator.dynamic_import_manager.is_running
+
         return attrs
 
 class NeovoltGridPowerOffsetSensor(CoordinatorEntity, SensorEntity):

@@ -266,18 +266,19 @@ class DynamicExportManager:
             10.0,
         ))
 
-        # ── SOC guard — use combined SOC when follower is linked ─────────────
-        # Falls back to host battery_soc on single-inverter setups.
+        # ── SOC guard — pause discharge at cutoff, let inverter's Para5 ceiling handle it ──
+        # We send a standby command (0W, dispatch active) rather than stopping the loop.
+        # The inverter firmware enforces the SOC floor via Para5 independently, so even
+        # if the loop keeps running, no harmful discharge will occur.
+        # We do NOT reset _last_update_time here so the settle timer is not disturbed.
         current_soc = data.get(COMBINED_BATTERY_SOC) or data.get("battery_soc")
         if current_soc is not None and current_soc <= soc_cutoff:
             _LOGGER.info(
                 f"Dynamic Export: SOC {current_soc:.1f}% at or below "
                 f"cutoff {soc_cutoff}% — sending standby command"
             )
-            await self._send_standby_command()
-            self._last_grid_power_w = None
+            await self._send_standby_command(soc_cutoff)
             self._last_commanded_power_kw = 0.0
-            self._last_update_time = dt_util.now()
             return
 
         # ── Grid power (signed, W) ────────────────────────────────────────────
@@ -385,7 +386,7 @@ class DynamicExportManager:
                 f"Dynamic Export: Within tolerance "
                 f"(Grid={grid_power_w/1000:.2f}kW, Target={target_export_kw:.2f}kW)"
             )
-            await self._send_standby_command()
+            await self._send_standby_command(soc_cutoff)
             self._last_commanded_power_kw = 0.0
 
         self._last_update_time = now
@@ -472,8 +473,15 @@ class DynamicExportManager:
             _LOGGER.error(f"Failed to send Dynamic Export charge command: {e}")
             raise
 
-    async def _send_standby_command(self) -> None:
-        """Send standby command (dispatch start=1 but power=0) to keep mode active."""
+    async def _send_standby_command(self, soc_limit: int = 0) -> None:
+        """Send standby command (dispatch start=1 but power=0) to keep mode active.
+
+        Args:
+            soc_limit: SOC cutoff percentage (0-100) to encode into Para5.
+                       Always pass the discharge cutoff so the inverter never
+                       discharges below the floor even when commanding 0W.
+        """
+        soc_value = soc_percent_to_register(soc_limit)
         try:
             # Keep dispatch active but with 0W command
             values = [
@@ -483,7 +491,7 @@ class DynamicExportManager:
                 0,                              # Para3 high byte
                 0,                              # Para3 low: Reactive power = 0
                 DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2
-                0,                              # Para5: SOC (not used for 0W)
+                soc_value,                      # Para5: SOC cutoff (preserve floor)
                 0,                              # Para6 high byte
                 600,                            # Para6 low: 10 minute timeout
                 255,                            # Para7: Energy routing (default)
@@ -712,17 +720,19 @@ class DynamicImportManager:
             100.0,
         ))
 
-        # ── SOC guard — stop charging if battery is at or above target SOC ──
+        # ── SOC guard — pause charging at target, let inverter's Para5 ceiling handle it ──
+        # We send a standby command (0W, dispatch active) rather than stopping the loop.
+        # The inverter firmware enforces the SOC ceiling via Para5 = 255 independently,
+        # so even if the loop keeps running, no overcharge will occur.
+        # We do NOT reset _last_update_time here so the settle timer is not disturbed.
         current_soc = data.get(COMBINED_BATTERY_SOC) or data.get("battery_soc")
         if current_soc is not None and current_soc >= soc_target:
             _LOGGER.info(
                 f"Dynamic Import: SOC {current_soc:.1f}% at or above "
                 f"target {soc_target}% — sending standby command"
             )
-            await self._send_standby_command()
-            self._last_grid_power_w = None
+            await self._send_standby_command(soc_target)
             self._last_commanded_power_kw = 0.0
-            self._last_update_time = dt_util.now()
             return
 
         # ── Grid power (signed, W) ────────────────────────────────────────────
@@ -834,7 +844,7 @@ class DynamicImportManager:
                 f"Dynamic Import: Within tolerance "
                 f"(Grid={grid_power_w/1000:.2f}kW, Target={target_import_kw:.2f}kW)"
             )
-            await self._send_standby_command()
+            await self._send_standby_command(soc_target)
             self._last_commanded_power_kw = 0.0
 
         # Record time of this command for settle timer
@@ -902,8 +912,15 @@ class DynamicImportManager:
             _LOGGER.error(f"Failed to send Dynamic Import discharge command: {e}")
             raise
 
-    async def _send_standby_command(self) -> None:
-        """Send standby command to keep mode active at 0W."""
+    async def _send_standby_command(self, soc_limit: int = 100) -> None:
+        """Send standby command to keep mode active at 0W.
+
+        Args:
+            soc_limit: SOC target percentage (0-100) to encode into Para5.
+                       Always pass the charge target so the inverter never
+                       charges above the ceiling even when commanding 0W.
+        """
+        soc_value = soc_percent_to_register(soc_limit)
         try:
             values = [
                 1,                              # Para1: Dispatch start (keep active)
@@ -912,7 +929,7 @@ class DynamicImportManager:
                 0,                              # Para3 high byte
                 0,                              # Para3 low: Reactive power = 0
                 DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2
-                0,                              # Para5: SOC (not used for 0W)
+                soc_value,                      # Para5: SOC target (preserve ceiling)
                 0,                              # Para6 high byte
                 600,                            # Para6 low: 10 minute timeout
                 255,                            # Para7: Energy routing (default)
