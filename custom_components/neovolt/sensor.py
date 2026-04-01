@@ -673,7 +673,7 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
         elif dispatch_mode == 19:
             mode = "No Battery Charge"
         elif dispatch_mode == DISPATCH_MODE_NO_DISCHARGE:
-            mode = "No Battery Discharge"
+            mode = "Idle (No Dispatch)"
         elif dispatch_mode == 2:
             if dispatch_power > 0:
                 mode = "Force Discharging"

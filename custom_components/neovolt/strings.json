@@ -110,7 +110,7 @@
           "dynamic_export": "Dynamic Export",
           "dynamic_import": "Dynamic Import",
           "no_battery_charge": "No Battery Charge",
-          "no_battery_discharge": "No Battery Discharge"
+          "no_battery_discharge": "Idle (No Dispatch)"
         },
         "state_attributes": {
           "normal": {
@@ -132,7 +132,7 @@
             "description": "Prevent all battery charging (from solar and grid)"
           },
           "no_battery_discharge": {
-            "description": "Prevent battery discharge while still allowing charging from solar excess. Targets zero battery output power using Mode 2."
+            "description": "Halts all active battery dispatch. Both charging and discharging are suppressed — the battery sits idle. Useful when you want the inverter online but don't want it moving energy in either direction."
           }
         }
       }

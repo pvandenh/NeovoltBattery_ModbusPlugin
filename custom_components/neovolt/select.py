@@ -207,7 +207,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         "Dynamic Export",
         "Dynamic Import",
         "No Battery Charge",
-        "No Battery Discharge",
+        "Idle (No Dispatch)",
     ]
 
     def __init__(self, coordinator, device_info, device_name, client, hass):
@@ -248,7 +248,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             return "Dynamic Import"
 
         if dispatch_mode == DISPATCH_MODE_NO_DISCHARGE:
-            return "No Battery Discharge"
+            return "Idle (No Dispatch)"
 
         # Mode 19: No Battery Charge (hardware mode, reads back correctly)
         if dispatch_mode == DISPATCH_MODE_NO_CHARGE:
@@ -279,7 +279,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
                 await self._start_dynamic_import()
             elif option == "No Battery Charge":
                 await self._start_no_battery_charge()
-            elif option == "No Battery Discharge":
+            elif option == "Idle (No Dispatch)":
                 await self._start_no_battery_discharge()
             else:
                 _LOGGER.error(f"Unknown dispatch mode: {option}")
@@ -519,12 +519,14 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         await self.coordinator.async_request_refresh()
 
     async def _start_no_battery_discharge(self):
-        """Prevent battery discharge while still allowing charging from solar excess.
+        """Idle (No Dispatch) mode — halts all active battery dispatch.
 
-        Implementation: Mode 2 (DISPATCH_MODE_POWER_WITH_SOC) with Para2 = MODBUS_OFFSET
-        (32000 = zero net power). This instructs the inverter to target 0 W battery
-        output, which clamps discharge to zero while leaving the BMS free to accept
-        charge from any available solar excess.
+        Sets the inverter to target 0 W battery output using Mode 2
+        (DISPATCH_MODE_POWER_WITH_SOC) with Para2 = MODBUS_OFFSET (32000).
+
+        Observed behaviour: both battery discharge AND solar-to-battery charging
+        are suppressed. The battery sits idle. This is useful when you want the
+        inverter online but don't want it moving energy in either direction.
 
         The mode is tracked internally via DISPATCH_MODE_NO_DISCHARGE (97) stored in
         coordinator data so that current_option can distinguish it from a plain
@@ -562,7 +564,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         ]
 
         _LOGGER.info(
-            f"Enabling No Battery Discharge mode for {duration} minutes "
+            f"Enabling Idle (No Dispatch) mode for {duration} minutes "
             f"(hardware: Mode 2, power=0W / Para2={MODBUS_OFFSET})"
         )
 
