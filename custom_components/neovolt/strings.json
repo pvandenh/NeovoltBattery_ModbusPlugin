@@ -109,7 +109,8 @@
           "force_discharge": "Force Discharge",
           "dynamic_export": "Dynamic Export",
           "dynamic_import": "Dynamic Import",
-          "no_battery_charge": "No Battery Charge"
+          "no_battery_charge": "No Battery Charge",
+          "no_battery_discharge": "No Battery Discharge"
         },
         "state_attributes": {
           "normal": {
@@ -129,6 +130,9 @@
           },
           "no_battery_charge": {
             "description": "Prevent all battery charging (from solar and grid)"
+          },
+          "no_battery_discharge": {
+            "description": "Prevent battery discharge while still allowing charging from solar excess. Targets zero battery output power using Mode 2."
           }
         }
       }

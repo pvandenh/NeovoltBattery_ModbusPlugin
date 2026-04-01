@@ -555,28 +555,84 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         }
 
     def _parse_battery_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse battery register block (0x0100-0x0127)."""
+        """Parse battery register block (0x0100-0x0127).
+
+        New diagnostic registers extracted here (all within the count=40 block):
+          0x0103 (index  3) — battery_status_raw       (Note1)
+          0x0104 (index  4) — battery_relay_status_raw (Note2)
+          0x011C (index 28) — battery_protection_raw   (Note6, 16-bit used as bitmask)
+          0x011D (index 29) — battery_warning_raw      (Note4, 16-bit bitmask)
+          0x011E (index 30) — battery_fault_raw high   (Note5, 32-bit: high word)
+          0x011F (index 31) — battery_fault_raw low    (Note5, 32-bit: low word)
+        """
+        battery_fault_raw = self._to_unsigned_32(regs[30], regs[31])
         return {
             "battery_voltage": regs[0] * 0.1,
             "battery_current": self._to_signed(regs[1]) * 0.1,
             "battery_soc": regs[2] * 0.1,
+            # Diagnostic status registers
+            "battery_status_raw": regs[3],
+            "battery_relay_status_raw": regs[4],
             "battery_min_cell_voltage": regs[7] * 0.001,
             "battery_max_cell_voltage": regs[10] * 0.001,
             "battery_min_cell_temp": self._to_signed(regs[13]) * 0.1,
             "battery_max_cell_temp": self._to_signed(regs[16]) * 0.1,
             "battery_capacity": regs[25] * 0.1,
             "battery_soh": regs[27] * 0.1,
+            # Fault / warning / protection bitmask registers
+            "battery_protection_raw": regs[28],
+            "battery_warning_raw": regs[29],
+            "battery_fault_raw": battery_fault_raw,
+            # Derived boolean: any active fault or protection active
+            "battery_has_fault": battery_fault_raw != 0,
+            "battery_has_warning": regs[29] != 0,
+            "battery_has_protection": regs[28] != 0,
             "battery_charge_energy": self._to_unsigned_32(regs[32], regs[33]) * 0.1,
             "battery_discharge_energy": self._to_unsigned_32(regs[34], regs[35]) * 0.1,
             "battery_power": self._to_signed(regs[38]),
         }
 
     def _parse_inverter_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse inverter register block (0x0500-0x056D)."""
+        """Parse inverter register block (0x0500-0x056D).
+
+        Inverter block starts at 0x0500, count=110, so index = address - 0x0500.
+
+        New diagnostic registers extracted here (all within the count=110 block):
+          0x050E (index 14)      — inv_work_mode         (Note7)
+          0x055E-0x055F (94-95)  — inverter_warning_1    (Note10, 32-bit low half)
+          0x0560-0x0561 (96-97)  — inverter_warning_2    (Note10, 32-bit high half)
+          0x0562-0x0563 (98-99)  — inverter_fault_1      (Note11, 32-bit low half)
+          0x0564-0x0565 (100-101)— inverter_fault_2      (Note11, 32-bit high half)
+          0x0566-0x0567 (102-103)— inverter_fault_3      (Note12, 32-bit low half)
+          0x0568-0x0569 (104-105)— inverter_fault_4      (Note12, 32-bit high half)
+
+        Warnings are a 64-bit field split across four 16-bit registers:
+          Bit63..48 = reg 0x055E, Bit47..32 = reg 0x055F,
+          Bit31..16 = reg 0x0560, Bit15..0  = reg 0x0561
+
+        Faults (Note11) are similarly a 64-bit field across 0x0562-0x0565.
+        Extended faults (Note12) across 0x0566-0x0569.
+        """
+        # 64-bit warning field (bit layout as documented in Note10)
+        # 055E = bits 63-48, 055F = bits 47-32, 0560 = bits 31-16, 0561 = bits 15-0
+        inv_warning_raw = (
+            (regs[94] << 48) | (regs[95] << 32) | (regs[96] << 16) | regs[97]
+        )
+        # 64-bit fault field (Note11)
+        inv_fault_raw = (
+            (regs[98] << 48) | (regs[99] << 32) | (regs[100] << 16) | regs[101]
+        )
+        # 64-bit extended fault field (Note12)
+        inv_fault_ext_raw = (
+            (regs[102] << 48) | (regs[103] << 32) | (regs[104] << 16) | regs[105]
+        )
+
         return {
             "inv_energy_output": self._to_unsigned_32(regs[2], regs[3]) * 0.1,
             "inv_energy_input": self._to_unsigned_32(regs[4], regs[5]) * 0.1,
             "total_pv_energy": self._to_unsigned_32(regs[10], regs[11]) * 0.1,
+            # Work mode (Note7)
+            "inv_work_mode_raw": regs[14],
             "inv_module_temp": self._to_signed(regs[16]) * 0.1,
             "pv_boost_temp": self._to_signed(regs[17]) * 0.1,
             "battery_buck_boost_temp": self._to_signed(regs[18]) * 0.1,
@@ -593,12 +649,35 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             "pv_dc_power_total": regs[45],
             "inv_power_active": self._to_signed_32(regs[69], regs[70]),
             "backup_power": self._to_signed_32(regs[91], regs[92]),
+            # Fault / warning bitmask registers
+            "inv_warning_raw": inv_warning_raw,
+            "inv_fault_raw": inv_fault_raw,
+            "inv_fault_ext_raw": inv_fault_ext_raw,
+            # Derived booleans for easy alerting
+            "inv_has_warning": inv_warning_raw != 0,
+            "inv_has_fault": (inv_fault_raw != 0) or (inv_fault_ext_raw != 0),
+            # Fault mode flag: work mode == 7 means the inverter is in FaultMode
+            "inv_in_fault_mode": regs[14] == 7,
         }
 
     def _parse_pv_inverter_energy_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse PV inverter energy register block (0x08D0)."""
+        """Parse PV inverter energy + system fault block (0x08D0, count=6).
+
+        Register map (block starts at 0x08D0):
+          0x08D0-0x08D1 (index 0-1) — PV Inverter Energy (32-bit, 0.01 kWh)
+          0x08D2-0x08D3 (index 2-3) — System total PV energy (32-bit, 0.01 kWh)
+          0x08D4-0x08D5 (index 4-5) — System fault (32-bit bitmask, Note8)
+
+        The block count was extended from 2 to 6 to include the system fault
+        registers at 0x08D4-0x08D5 without adding a separate register block.
+        """
         pv_inverter_total = self._to_unsigned_32(regs[0], regs[1]) * 0.01
-        return {"pv_inverter_energy": pv_inverter_total}
+        system_fault_raw = self._to_unsigned_32(regs[4], regs[5])
+        return {
+            "pv_inverter_energy": pv_inverter_total,
+            "system_fault_raw": system_fault_raw,
+            "system_has_fault": system_fault_raw != 0,
+        }
 
     def _parse_settings_registers(self, regs: List[int]) -> Dict[str, Any]:
         """Parse settings register block (0x0800-0x0855)."""
@@ -624,7 +703,11 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         tracking mode constant (98 = Dynamic Import, 99 = Dynamic Export) so the
         select entity keeps reporting the correct option between polls.
         """
-        from .const import DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT
+        from .const import (
+            DISPATCH_MODE_DYNAMIC_EXPORT,
+            DISPATCH_MODE_DYNAMIC_IMPORT,
+            DISPATCH_MODE_NO_DISCHARGE,
+        )
 
         power_raw = self._to_unsigned_32(regs[1], regs[2])
         time_raw = self._to_unsigned_32(regs[7], regs[8])
@@ -643,10 +726,25 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             and self.dynamic_import_manager.is_running
         )
 
+        # Check if No Battery Discharge is currently the cached mode.
+        # Like the dynamic managers, this mode uses hardware Mode 2, so the
+        # hardware readback never distinguishes it from a plain Force Charge /
+        # Force Discharge command.  We preserve the internal tracking constant
+        # (97) as long as dispatch_start is still active and the cached mode
+        # is still DISPATCH_MODE_NO_DISCHARGE, preventing the select and status
+        # sensor from snapping back to "Normal" / "Dispatch Active" on each poll.
+        cached_mode = self.data.get("dispatch_mode") if self.data else None
+        no_discharge_active = (
+            cached_mode == DISPATCH_MODE_NO_DISCHARGE
+            and regs[0] == 1  # dispatch_start still active
+        )
+
         if dynamic_import_running:
             effective_mode = DISPATCH_MODE_DYNAMIC_IMPORT
         elif dynamic_export_running:
             effective_mode = DISPATCH_MODE_DYNAMIC_EXPORT
+        elif no_discharge_active:
+            effective_mode = DISPATCH_MODE_NO_DISCHARGE
         else:
             effective_mode = hardware_mode
 

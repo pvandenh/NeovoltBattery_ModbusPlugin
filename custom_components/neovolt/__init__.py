@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -46,8 +47,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Neovolt from a config entry."""
     _LOGGER.debug(f"Setting up Neovolt integration with config: {entry.data}")
 
-    # Migrate existing entries without device_name (keep "inverter" for backward compatibility)
     new_data = {**entry.data}
+
+    # Migrate existing entries without device_name (keep "inverter" for backward compatibility)
     if CONF_DEVICE_NAME not in entry.data:
         new_data[CONF_DEVICE_NAME] = "inverter"
         _LOGGER.info("Migrated existing entry to device_name='inverter'")
@@ -70,6 +72,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         new_data[CONF_MAX_CHARGE_POWER] = DEFAULT_MAX_CHARGE_POWER
         new_data[CONF_MAX_DISCHARGE_POWER] = DEFAULT_MAX_DISCHARGE_POWER
         _LOGGER.info("Migrated existing entry with default power configuration")
+
+    # NOTE: We intentionally do NOT slugify device_name for existing entries here.
+    # Doing so would change unique_id strings for all entities on that device,
+    # causing Home Assistant to orphan the old entities and break any automations,
+    # dashboards, or energy dashboard entries that reference them by entity ID.
+    # Slugification is enforced only for new entries via config_flow.py.
 
     # Apply migrations if any
     if new_data != entry.data:
@@ -104,7 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    
+
     # ── Link follower coordinator into host ──────────────────────────────────
     # After every entry setup (host or follower), scan all loaded Neovolt entries
     # and wire any follower coordinator reference into the host coordinator.
@@ -209,22 +217,22 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
         STORAGE_LAST_KNOWN_TOTAL,
         STORAGE_DAILY_PRESERVED,
     }
-    
+
     # Get current options
     options = entry.options or {}
-    
+
     # If we have options, check if only runtime keys were updated
     if options:
         # Get all keys that are NOT runtime keys (i.e., actual config keys)
         config_keys = set(options.keys()) - RUNTIME_KEYS
-        
+
         # If no config keys exist (only runtime keys), skip reload
         if not config_keys:
             _LOGGER.debug(
                 "Persistent data updated (runtime keys only), skipping integration reload"
             )
             return
-    
+
     # Configuration keys were changed - reload integration
     _LOGGER.info("Configuration changed, reloading Neovolt integration")
     await hass.config_entries.async_reload(entry.entry_id)

@@ -36,6 +36,16 @@ from .const import (
     COMBINED_BATTERY_MAX_CELL_T,
     COMBINED_BATTERY_CHARGE_E,
     COMBINED_BATTERY_DISCHARGE_E,
+    BATTERY_STATUS_MAP,
+    BATTERY_RELAY_STATUS_MAP,
+    BATTERY_WARNING_BITS,
+    BATTERY_FAULT_BITS,
+    BATTERY_PROTECTION_BITS,
+    INVERTER_WORK_MODE_MAP,
+    INVERTER_WARNING_BITS,
+    INVERTER_FAULT_BITS,
+    INVERTER_FAULT_EXT_BITS,
+    SYSTEM_FAULT_BITS,
 )
 
 
@@ -228,6 +238,76 @@ async def async_setup_entry(
         # Grid power calibration offset readback (AlphaESS shared firmware, register 0x11D5)
         # Shows the currently active offset in watts. Unavailable if firmware doesn't support it.
         NeovoltGridPowerOffsetSensor(coordinator, device_info, device_name),
+
+        # ── Diagnostic / Fault sensors ────────────────────────────────────────
+        # Inverter work mode (Note7) — useful to detect "Fault" mode (value 7)
+        NeovoltWorkModeSensor(coordinator, device_info, device_name),
+
+        # Battery status (Note1) and relay status (Note2)
+        NeovoltBatteryStatusSensor(coordinator, device_info, device_name),
+        NeovoltBatteryRelayStatusSensor(coordinator, device_info, device_name),
+
+        # Battery fault / warning / protection bitmask sensors (Notes 4, 5, 6)
+        NeovoltFaultSensor(
+            coordinator, device_info, device_name,
+            key="battery_fault_raw",
+            has_fault_key="battery_has_fault",
+            name="Battery Fault",
+            bit_map=BATTERY_FAULT_BITS,
+            icon="mdi:battery-alert",
+        ),
+        NeovoltFaultSensor(
+            coordinator, device_info, device_name,
+            key="battery_warning_raw",
+            has_fault_key="battery_has_warning",
+            name="Battery Warning",
+            bit_map=BATTERY_WARNING_BITS,
+            icon="mdi:battery-alert-variant",
+        ),
+        NeovoltFaultSensor(
+            coordinator, device_info, device_name,
+            key="battery_protection_raw",
+            has_fault_key="battery_has_protection",
+            name="Battery Protection",
+            bit_map=BATTERY_PROTECTION_BITS,
+            icon="mdi:battery-lock",
+        ),
+
+        # Inverter fault / warning bitmask sensors (Notes 10, 11, 12)
+        NeovoltFaultSensor(
+            coordinator, device_info, device_name,
+            key="inv_fault_raw",
+            has_fault_key="inv_has_fault",
+            name="Inverter Fault",
+            bit_map=INVERTER_FAULT_BITS,
+            icon="mdi:alert-circle",
+        ),
+        NeovoltFaultSensor(
+            coordinator, device_info, device_name,
+            key="inv_fault_ext_raw",
+            has_fault_key="inv_has_fault",
+            name="Inverter Fault Extended",
+            bit_map=INVERTER_FAULT_EXT_BITS,
+            icon="mdi:alert-circle-outline",
+        ),
+        NeovoltFaultSensor(
+            coordinator, device_info, device_name,
+            key="inv_warning_raw",
+            has_fault_key="inv_has_warning",
+            name="Inverter Warning",
+            bit_map=INVERTER_WARNING_BITS,
+            icon="mdi:alert",
+        ),
+
+        # System-level fault bitmask sensor (Note8)
+        NeovoltFaultSensor(
+            coordinator, device_info, device_name,
+            key="system_fault_raw",
+            has_fault_key="system_has_fault",
+            name="System Fault",
+            bit_map=SYSTEM_FAULT_BITS,
+            icon="mdi:alert-octagon",
+        ),
 
         # Calculated/Template Sensors
         NeovoltCalculatedSensor(coordinator, device_info, device_name, "total_house_load", "Total House Load",
@@ -520,7 +600,7 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         """Return human-readable dispatch status."""
-        from .const import DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT
+        from .const import DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT, DISPATCH_MODE_NO_DISCHARGE
 
         data = self.coordinator.data
         dispatch_start = data.get("dispatch_start", 0)
@@ -592,6 +672,8 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
             power_kw = abs(dispatch_power) / 1000 if dispatch_power else None
         elif dispatch_mode == 19:
             mode = "No Battery Charge"
+        elif dispatch_mode == DISPATCH_MODE_NO_DISCHARGE:
+            mode = "No Battery Discharge"
         elif dispatch_mode == 2:
             if dispatch_power > 0:
                 mode = "Force Discharging"
@@ -606,8 +688,8 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
         else:
             mode = f"Mode {dispatch_mode}"
 
-        # Build status string — suppress power display for dynamic modes (they show their own context)
-        dynamic_modes = (DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT)
+        # Build status string — suppress power display for dynamic/no-power modes
+        dynamic_modes = (DISPATCH_MODE_DYNAMIC_EXPORT, DISPATCH_MODE_DYNAMIC_IMPORT, DISPATCH_MODE_NO_DISCHARGE)
         if power_kw and dispatch_mode not in dynamic_modes:
             status = f"{mode} @ {power_kw:.1f}kW"
         else:
@@ -653,6 +735,195 @@ class NeovoltDispatchStatusSensor(CoordinatorEntity, SensorEntity):
                 attrs["dynamic_import_running"] = self.coordinator.dynamic_import_manager.is_running
 
         return attrs
+
+class NeovoltFaultSensor(CoordinatorEntity, SensorEntity):
+    """Diagnostic sensor that decodes a bitmask register into a human-readable state.
+
+    State is "OK" when no bits are set, or a short summary of the first active
+    fault/warning/protection bit otherwise.  All active conditions are exposed
+    as a list in the ``active_conditions`` extra state attribute so that HA
+    automations can inspect the full set of active bits.
+
+    The raw integer value is also exposed as ``raw_value`` for advanced use.
+    """
+
+    def __init__(
+        self,
+        coordinator,
+        device_info,
+        device_name: str,
+        key: str,
+        has_fault_key: str,
+        name: str,
+        bit_map: dict,
+        icon: str,
+    ):
+        """Initialize the fault sensor."""
+        super().__init__(coordinator)
+        self._key = key
+        self._has_fault_key = has_fault_key
+        self._bit_map = bit_map
+        self._attr_name = f"Neovolt {device_name} {name}"
+        self._attr_unique_id = f"neovolt_{device_name}_{key}_sensor"
+        self._attr_icon = icon
+        self._attr_device_info = device_info
+        # No unit, no device class — it's a text/diagnostic sensor
+        self._attr_native_unit_of_measurement = None
+        self._attr_device_class = None
+        self._attr_state_class = None
+
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data and register was read."""
+        return self.coordinator.has_valid_data and self._key in self.coordinator.data
+
+    def _get_active_conditions(self) -> list[str]:
+        """Return a list of human-readable labels for all set bits in the raw value."""
+        raw = self.coordinator.data.get(self._key, 0) or 0
+        active = []
+        for bit, label in self._bit_map.items():
+            if raw & (1 << bit):
+                active.append(label)
+        return active
+
+    @property
+    def native_value(self) -> str:
+        """Return 'OK' when no faults, or the first active condition label."""
+        active = self._get_active_conditions()
+        if not active:
+            return "OK"
+        # Return the first (lowest bit) active condition as the primary state
+        return active[0] if len(active) == 1 else f"{active[0]} (+{len(active) - 1} more)"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the full set of active conditions and the raw register value."""
+        active = self._get_active_conditions()
+        raw = self.coordinator.data.get(self._key, 0) or 0
+        return {
+            "active_conditions": active,
+            "active_count": len(active),
+            "raw_value": raw,
+            "raw_hex": hex(raw),
+            "has_fault": bool(self.coordinator.data.get(self._has_fault_key, False)),
+        }
+
+
+class NeovoltWorkModeSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing the inverter work mode (register 0x050E, Note7).
+
+    State is the human-readable mode name.  "Fault" mode (value 7) is the
+    most actionable: it means the inverter has stopped and raised a fault.
+    """
+
+    def __init__(self, coordinator, device_info, device_name: str):
+        """Initialize the work mode sensor."""
+        super().__init__(coordinator)
+        self._attr_name = f"Neovolt {device_name} Inverter Work Mode"
+        self._attr_unique_id = f"neovolt_{device_name}_inv_work_mode"
+        self._attr_icon = "mdi:cog"
+        self._attr_device_info = device_info
+        self._attr_native_unit_of_measurement = None
+        self._attr_device_class = None
+        self._attr_state_class = None
+
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return (
+            self.coordinator.has_valid_data
+            and "inv_work_mode_raw" in self.coordinator.data
+        )
+
+    @property
+    def native_value(self) -> str:
+        """Return the human-readable work mode name."""
+        raw = self.coordinator.data.get("inv_work_mode_raw")
+        if raw is None:
+            return None
+        return INVERTER_WORK_MODE_MAP.get(raw, f"Unknown ({raw})")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return raw mode value and fault-mode flag."""
+        raw = self.coordinator.data.get("inv_work_mode_raw")
+        return {
+            "raw_value": raw,
+            "in_fault_mode": self.coordinator.data.get("inv_in_fault_mode", False),
+        }
+
+
+class NeovoltBatteryStatusSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing the battery charge/discharge status (register 0x0103, Note1)."""
+
+    def __init__(self, coordinator, device_info, device_name: str):
+        """Initialize the battery status sensor."""
+        super().__init__(coordinator)
+        self._attr_name = f"Neovolt {device_name} Battery Status"
+        self._attr_unique_id = f"neovolt_{device_name}_battery_status"
+        self._attr_icon = "mdi:battery-charging"
+        self._attr_device_info = device_info
+        self._attr_native_unit_of_measurement = None
+        self._attr_device_class = None
+        self._attr_state_class = None
+
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return (
+            self.coordinator.has_valid_data
+            and "battery_status_raw" in self.coordinator.data
+        )
+
+    @property
+    def native_value(self) -> str:
+        """Return the human-readable battery status."""
+        raw = self.coordinator.data.get("battery_status_raw")
+        if raw is None:
+            return None
+        return BATTERY_STATUS_MAP.get(raw, f"Unknown ({raw})")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return raw register value."""
+        return {"raw_value": self.coordinator.data.get("battery_status_raw")}
+
+
+class NeovoltBatteryRelayStatusSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing the battery relay status (register 0x0104, Note2)."""
+
+    def __init__(self, coordinator, device_info, device_name: str):
+        """Initialize the battery relay status sensor."""
+        super().__init__(coordinator)
+        self._attr_name = f"Neovolt {device_name} Battery Relay Status"
+        self._attr_unique_id = f"neovolt_{device_name}_battery_relay_status"
+        self._attr_icon = "mdi:electric-switch"
+        self._attr_device_info = device_info
+        self._attr_native_unit_of_measurement = None
+        self._attr_device_class = None
+        self._attr_state_class = None
+
+    @property
+    def available(self) -> bool:
+        """Return True if coordinator has valid cached data."""
+        return (
+            self.coordinator.has_valid_data
+            and "battery_relay_status_raw" in self.coordinator.data
+        )
+
+    @property
+    def native_value(self) -> str:
+        """Return the human-readable relay status."""
+        raw = self.coordinator.data.get("battery_relay_status_raw")
+        if raw is None:
+            return None
+        return BATTERY_RELAY_STATUS_MAP.get(raw, f"Unknown ({raw})")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return raw register value."""
+        return {"raw_value": self.coordinator.data.get("battery_relay_status_raw")}
+
 
 class NeovoltGridPowerOffsetSensor(CoordinatorEntity, SensorEntity):
     """Readback sensor for the grid power calibration offset (register 0x11D5).

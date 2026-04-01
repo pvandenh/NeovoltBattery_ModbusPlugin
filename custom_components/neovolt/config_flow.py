@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from typing import Any
 
 import voluptuous as vol
@@ -94,6 +96,39 @@ STEP_POLLING_DATA_SCHEMA = vol.Schema(
 )
 
 
+def slugify_device_name(name: str) -> str:
+    """Convert a user-supplied device name into a safe slug for use in entity IDs.
+
+    Rules:
+    - Normalise unicode to ASCII equivalents where possible (e.g. é → e).
+    - Convert to lowercase.
+    - Replace spaces and hyphens with underscores.
+    - Strip all remaining characters that are not alphanumeric or underscores.
+    - Collapse consecutive underscores into one.
+    - Strip leading/trailing underscores.
+
+    Examples:
+        "My Inverter"   → "my_inverter"
+        "Unit-2"        → "unit_2"
+        "Résidence #1"  → "residence_1"
+        "inverter"      → "inverter"
+        "1"             → "1"
+    """
+    # Normalise unicode (e.g. accented characters → base ASCII)
+    normalised = unicodedata.normalize("NFKD", name)
+    ascii_name = normalised.encode("ascii", "ignore").decode("ascii")
+    # Lowercase
+    lower = ascii_name.lower()
+    # Spaces and hyphens become underscores
+    underscored = re.sub(r"[\s\-]+", "_", lower)
+    # Remove any character that isn't alphanumeric or underscore
+    safe = re.sub(r"[^\w]", "", underscored)
+    # Collapse runs of underscores
+    collapsed = re.sub(r"_+", "_", safe)
+    # Strip leading/trailing underscores
+    return collapsed.strip("_")
+
+
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect."""
 
@@ -159,13 +194,29 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 self._abort_if_unique_id_configured()
 
-                # Generate device name if not provided
-                device_name = user_input.get(CONF_DEVICE_NAME, "").strip()
+                # Generate device name if not provided, then sanitise to a safe slug.
+                # The slug is what gets stored and used in unique_id / entity naming.
+                raw_name = user_input.get(CONF_DEVICE_NAME, "").strip()
+                if not raw_name:
+                    existing_entries = self.hass.config_entries.async_entries(DOMAIN)
+                    raw_name = str(len(existing_entries) + 1)
+
+                device_name = slugify_device_name(raw_name)
+
+                # Fallback: if slugification produced an empty string (e.g. all
+                # special characters), fall back to the auto-numbered default.
                 if not device_name:
-                    existing_entries = [
-                        entry for entry in self.hass.config_entries.async_entries(DOMAIN)
-                    ]
+                    existing_entries = self.hass.config_entries.async_entries(DOMAIN)
                     device_name = str(len(existing_entries) + 1)
+                    _LOGGER.warning(
+                        "Device name '%s' produced an empty slug; "
+                        "falling back to auto-number '%s'",
+                        raw_name, device_name
+                    )
+
+                _LOGGER.debug(
+                    "Device name: raw=%r  slug=%r", raw_name, device_name
+                )
 
                 user_input[CONF_DEVICE_NAME] = device_name
 

@@ -14,6 +14,8 @@ from .const import (
     DISPATCH_MODE_POWER_WITH_SOC,
     DISPATCH_MODE_DYNAMIC_EXPORT,
     DISPATCH_MODE_DYNAMIC_IMPORT,
+    DISPATCH_MODE_NO_CHARGE,
+    DISPATCH_MODE_NO_DISCHARGE,
     DISPATCH_RESET_VALUES,
     DOMAIN,
     MAX_SOC_PERCENT,
@@ -70,15 +72,15 @@ def soc_percent_to_register(soc_percent: float) -> int:
     Convert SOC percentage (0-100%) to register value (0-255) with bounds checking.
 
     FIXED: Uses correct conversion factor and full 0-255 range.
-    
+
     According to Modbus protocol:
     - Battery SOC reading (0x0102): uses 0.1 multiplier (value × 0.1 = %)
     - Dispatch SOC target (Para5): uses full 8-bit range (0-255)
-    
+
     Conversion formula: register_value = soc_percent × 2.55
     Examples:
     - 0% → 0
-    - 50% → 127.5 ≈ 128  
+    - 50% → 127.5 ≈ 128
     - 100% → 255
 
     Args:
@@ -205,6 +207,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         "Dynamic Export",
         "Dynamic Import",
         "No Battery Charge",
+        "No Battery Discharge",
     ]
 
     def __init__(self, coordinator, device_info, device_name, client, hass):
@@ -235,16 +238,20 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if dispatch_start == 0:
             return "Normal"
 
-        # Detect dynamic export mode (internal tracking mode)
+        # Check internal tracking modes first — these are set optimistically by our
+        # own commands and stored in coordinator data. They are never read back from
+        # hardware (the inverter always reports Mode 2 for all of them).
         if dispatch_mode == DISPATCH_MODE_DYNAMIC_EXPORT:
             return "Dynamic Export"
 
-        # Detect dynamic import mode (internal tracking mode)
         if dispatch_mode == DISPATCH_MODE_DYNAMIC_IMPORT:
             return "Dynamic Import"
 
-        # Mode 19: No Battery Charge
-        if dispatch_mode == 19:
+        if dispatch_mode == DISPATCH_MODE_NO_DISCHARGE:
+            return "No Battery Discharge"
+
+        # Mode 19: No Battery Charge (hardware mode, reads back correctly)
+        if dispatch_mode == DISPATCH_MODE_NO_CHARGE:
             return "No Battery Charge"
 
         # Mode 2 (power + SOC): determine charge/discharge based on power sign
@@ -272,6 +279,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
                 await self._start_dynamic_import()
             elif option == "No Battery Charge":
                 await self._start_no_battery_charge()
+            elif option == "No Battery Discharge":
+                await self._start_no_battery_discharge()
             else:
                 _LOGGER.error(f"Unknown dispatch mode: {option}")
 
@@ -351,7 +360,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         )
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_power", -power_watts)
-        self.coordinator.set_optimistic_value("dispatch_mode", 2)
+        self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_POWER_WITH_SOC)
         await self.coordinator.async_request_refresh()
 
     async def _start_force_discharge(self):
@@ -410,7 +419,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         )
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_power", power_watts)
-        self.coordinator.set_optimistic_value("dispatch_mode", 2)
+        self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_POWER_WITH_SOC)
         await self.coordinator.async_request_refresh()
 
     async def _start_dynamic_export(self):
@@ -491,7 +500,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             0,                              # Para2 low: Raw 0 (NOT 32000!)
             0,                              # Para3 high byte
             0,                              # Para3 low: Reactive power = 0
-            19,                             # Para4: Mode 19 (No Battery Charge)
+            DISPATCH_MODE_NO_CHARGE,        # Para4: Mode 19 (No Battery Charge)
             0,                              # Para5: SOC (not used)
             0,                              # Para6 high byte
             min(duration * 60, 65535),      # Para6 low: Time (seconds)
@@ -506,7 +515,65 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         )
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_power", 0)
-        self.coordinator.set_optimistic_value("dispatch_mode", 19)
+        self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_NO_CHARGE)
+        await self.coordinator.async_request_refresh()
+
+    async def _start_no_battery_discharge(self):
+        """Prevent battery discharge while still allowing charging from solar excess.
+
+        Implementation: Mode 2 (DISPATCH_MODE_POWER_WITH_SOC) with Para2 = MODBUS_OFFSET
+        (32000 = zero net power). This instructs the inverter to target 0 W battery
+        output, which clamps discharge to zero while leaving the BMS free to accept
+        charge from any available solar excess.
+
+        The mode is tracked internally via DISPATCH_MODE_NO_DISCHARGE (97) stored in
+        coordinator data so that current_option can distinguish it from a plain
+        Force Charge/Discharge command that also uses hardware Mode 2.
+
+        NOTE: Hardware Mode 20 was tested and found to trigger full-rate Force Charge
+        on this firmware. It is intentionally NOT used here.
+        """
+        # Stop dynamic export/import if running
+        if hasattr(self.coordinator, 'dynamic_export_manager'):
+            await self.coordinator.dynamic_export_manager.stop()
+        if hasattr(self.coordinator, 'dynamic_import_manager'):
+            await self.coordinator.dynamic_import_manager.stop()
+
+        duration = int(safe_get_entity_float(
+            self._hass,
+            f"number.neovolt_{self._device_name}_dispatch_duration",
+            120.0
+        ))
+
+        timeout_seconds = min(duration * 60, 65535)
+
+        values = [
+            1,                              # Para1: Dispatch start
+            0,                              # Para2 high byte
+            MODBUS_OFFSET,                  # Para2 low: 32000 = zero power (no discharge, no forced charge)
+            0,                              # Para3 high byte
+            0,                              # Para3 low: Reactive power = 0
+            DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (power + SOC control)
+            0,                              # Para5: SOC = 0 (no charge target enforced)
+            0,                              # Para6 high byte
+            timeout_seconds,                # Para6 low: Time (seconds)
+            255,                            # Para7: Energy routing (default)
+            0,                              # Para8: PV switch (auto)
+        ]
+
+        _LOGGER.info(
+            f"Enabling No Battery Discharge mode for {duration} minutes "
+            f"(hardware: Mode 2, power=0W / Para2={MODBUS_OFFSET})"
+        )
+
+        await self._hass.async_add_executor_job(
+            self._client.write_registers, 0x0880, values
+        )
+        # Use internal tracking constant so current_option can identify this mode
+        # even though the hardware reports Mode 2 (same as Force Charge/Discharge)
+        self.coordinator.set_optimistic_value("dispatch_start", 1)
+        self.coordinator.set_optimistic_value("dispatch_power", 0)
+        self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_NO_DISCHARGE)
         await self.coordinator.async_request_refresh()
 
 
@@ -570,17 +637,17 @@ class NeovoltPVSwitchSelect(CoordinatorEntity, SelectEntity):
                 para2_lo = MODBUS_OFFSET
 
             values = [
-                data.get("dispatch_start", 0),          # Para1
-                0,                                       # Para2 high byte
-                para2_lo,                               # Para2 low byte
-                0,                                       # Para3 high byte
-                0,                                       # Para3 low byte (reactive power)
-                data.get("dispatch_mode", 0),           # Para4
-                data.get("dispatch_soc", 0),            # Para5
-                0,                                       # Para6 high byte
-                data.get("dispatch_time_remaining", 90), # Para6 low byte
+                data.get("dispatch_start", 0),           # Para1
+                0,                                        # Para2 high byte
+                para2_lo,                                 # Para2 low byte
+                0,                                        # Para3 high byte
+                0,                                        # Para3 low byte (reactive power)
+                data.get("dispatch_mode", 0),             # Para4
+                data.get("dispatch_soc", 0),              # Para5
+                0,                                        # Para6 high byte
+                data.get("dispatch_time_remaining", 90),  # Para6 low byte
                 data.get("dispatch_energy_routing", 255), # Para7
-                new_value,                               # Para8: PV switch
+                new_value,                                # Para8: PV switch
             ]
 
             _LOGGER.info(f"Setting PV switch to: {option} (value: {new_value})")
