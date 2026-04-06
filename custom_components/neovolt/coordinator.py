@@ -516,18 +516,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             return self._parse_battery_registers(regs)
         elif block_name == "inverter":
             return self._parse_inverter_registers(regs)
-        elif block_name == "parallel_versions":
-            return self._parse_parallel_versions_registers(regs)
         elif block_name == "pv_inverter_energy":
             return self._parse_pv_inverter_energy_registers(regs)
-        elif block_name == "control":
-            return self._parse_control_registers(regs)
         elif block_name == "settings":
             return self._parse_settings_registers(regs)
-        elif block_name == "safety_config":
-            return self._parse_safety_config_registers(regs)
-        elif block_name == "parallel_config":
-            return self._parse_parallel_config_registers(regs)
         elif block_name == "dispatch":
             return self._parse_dispatch_registers(regs)
         elif block_name == "calibration":
@@ -687,85 +679,14 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             "system_has_fault": system_fault_raw != 0,
         }
 
-    def _parse_parallel_versions_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse master/slave software version strings (0x0640-0x0649)."""
-        def decode(start: int, count: int) -> str:
-            chars: list[str] = []
-            for reg in regs[start:start + count]:
-                hi = (reg >> 8) & 0xFF
-                lo = reg & 0xFF
-                if hi:
-                    chars.append(chr(hi))
-                if lo:
-                    chars.append(chr(lo))
-            return ''.join(chars).strip('\x00 ').strip()
-
-        return {
-            "master_software_version": decode(0, 5),
-            "slave_software_version": decode(5, 5),
-        }
-
-    def _parse_control_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse immediate control register block (0x071C-0x072F plus nearby words)."""
-        return {
-            "system_mode": regs[0],
-            "battery_mode": regs[17],
-            "battery_power_setpoint": self._to_signed(regs[18]),
-            "inverter_output_power_limit": regs[19],
-        }
-
     def _parse_settings_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse settings register block (0x0800-0x0861)."""
-        ip_octets = [
-            (regs[9] >> 8) & 0xFF,
-            regs[9] & 0xFF,
-            (regs[10] >> 8) & 0xFF,
-            regs[10] & 0xFF,
-        ]
+        """Parse settings register block (0x0800-0x0855)."""
         return {
             "max_feed_to_grid": regs[0],
             "pv_capacity": (regs[1] << 16) | regs[2],
-            "settings_system_mode": regs[5],
-            "meter_ct_select": regs[6],
-            "battery_ready": regs[7],
-            "local_ip": ".".join(str(octet) for octet in ip_octets),
-            "modbus_address": regs[15],
-            "grid_meter_negate": regs[18],
-            "pv_meter_negate": regs[19],
             "charging_cutoff_soc": regs[85],
             "discharging_cutoff_soc": regs[80],
             "time_period_control_flag": regs[79],
-            "discharge_window_1_start_hour": regs[81],
-            "discharge_window_1_end_hour": regs[82],
-            "discharge_window_2_start_hour": regs[83],
-            "discharge_window_2_end_hour": regs[84],
-            "charge_window_1_start_hour": regs[86],
-            "charge_window_1_end_hour": regs[87],
-            "charge_window_2_start_hour": regs[88],
-            "charge_window_2_end_hour": regs[89],
-            "discharge_window_1_start_minute": regs[90],
-            "discharge_window_1_end_minute": regs[91],
-            "discharge_window_2_start_minute": regs[92],
-            "discharge_window_2_end_minute": regs[93],
-            "charge_window_1_start_minute": regs[94],
-            "charge_window_1_end_minute": regs[95],
-            "charge_window_2_start_minute": regs[96],
-            "charge_window_2_end_minute": regs[97],
-            "ups_reserve_enable": regs[98],
-        }
-
-    def _parse_safety_config_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse safety/grid regulation block (0x1000)."""
-        return {
-            "grid_regulation": regs[0],
-        }
-
-    def _parse_parallel_config_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse parallel/master-follower config block (0x3090-0x3092)."""
-        return {
-            "parallel_mode": regs[0],
-            "battery_upgrade_select": regs[1],
-            "battery_soc_calibration": regs[2],
         }
 
     def _parse_dispatch_registers(self, regs: List[int]) -> Dict[str, Any]:

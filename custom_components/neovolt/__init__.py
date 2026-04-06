@@ -5,7 +5,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
@@ -34,21 +34,6 @@ from .const import (
 from .coordinator import NeovoltDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-SERVICE_FORCE_CHARGE = "force_charge"
-SERVICE_FORCE_DISCHARGE = "force_discharge"
-SERVICE_RETURN_TO_NORMAL = "return_to_normal"
-SERVICE_SET_GRID_POWER_OFFSET = "set_grid_power_offset"
-SERVICE_SET_SCHEDULE_WINDOW = "set_schedule_window"
-SERVICE_SET_SCHEDULE_WINDOW_HHMM = "set_schedule_window_hhmm"
-SERVICE_SET_IMMEDIATE_CONTROL = "set_immediate_control"
-
-IMMEDIATE_MODE_OPTIONS = {
-    "Auto/Normal": 0,
-    "Charge": 1,
-    "Discharge": 2,
-    "Standby": 3,
-}
 
 PLATFORMS: list[Platform] = [
     Platform.SENSOR,
@@ -116,7 +101,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Initialize domain data if not exists
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN].setdefault("services_registered", False)
 
     # Store coordinator, device info, client, device_name, and device_role
     hass.data[DOMAIN][entry.entry_id] = {
@@ -126,10 +110,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "device_name": device_name,
         "device_role": device_role,
     }
-
-    if not hass.data[DOMAIN]["services_registered"]:
-        _register_services(hass)
-        hass.data[DOMAIN]["services_registered"] = True
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -162,8 +142,6 @@ def _link_follower_to_host(hass: HomeAssistant) -> None:
     follower_entry_id = None
 
     for entry_id, entry_data in domain_data.items():
-        if not isinstance(entry_data, dict):
-            continue
         role = entry_data.get("device_role")
         if role == DEVICE_ROLE_HOST and host_entry_id is None:
             host_entry_id = entry_id
@@ -223,21 +201,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.debug("Closed Modbus connection for Neovolt integration")
             hass.data[DOMAIN].pop(entry.entry_id, None)
 
-        if DOMAIN in hass.data:
-            active_entries = [k for k in hass.data[DOMAIN].keys() if k != "services_registered"]
-            if not active_entries and hass.data[DOMAIN].get("services_registered"):
-                for service in [
-                    SERVICE_FORCE_CHARGE,
-                    SERVICE_FORCE_DISCHARGE,
-                    SERVICE_RETURN_TO_NORMAL,
-                    SERVICE_SET_GRID_POWER_OFFSET,
-                    SERVICE_SET_SCHEDULE_WINDOW,
-                    SERVICE_SET_SCHEDULE_WINDOW_HHMM,
-                    SERVICE_SET_IMMEDIATE_CONTROL,
-                ]:
-                    hass.services.async_remove(DOMAIN, service)
-                hass.data[DOMAIN]["services_registered"] = False
-
         # Re-link after unload — if the follower was removed, clear the host's reference
         _link_follower_to_host(hass)
 
@@ -273,158 +236,3 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # Configuration keys were changed - reload integration
     _LOGGER.info("Configuration changed, reloading Neovolt integration")
     await hass.config_entries.async_reload(entry.entry_id)
-
-
-def _get_target_device(hass: HomeAssistant, device_name: str | None = None) -> dict:
-    """Return target Neovolt entry data, defaulting to first host device."""
-    domain_data = hass.data.get(DOMAIN, {})
-    candidates = [
-        data for key, data in domain_data.items()
-        if key != "services_registered" and data.get("device_role") == DEVICE_ROLE_HOST
-    ]
-    if device_name is not None:
-        for data in candidates:
-            if data.get("device_name") == device_name:
-                return data
-        raise ValueError(f"No Neovolt host with device_name={device_name}")
-    if not candidates:
-        raise ValueError("No Neovolt host devices loaded")
-    return candidates[0]
-
-
-def _register_services(hass: HomeAssistant) -> None:
-    """Register Neovolt helper services."""
-
-    async def _call_entity_service(domain: str, service: str, data: dict) -> None:
-        await hass.services.async_call(domain, service, data, blocking=True)
-
-    async def _apply_schedule_window(device_name: str, mode: str, window: int, start_hour: int, start_minute: int, end_hour: int, end_minute: int) -> None:
-        prefix = f"{mode}_window_{window}"
-        for suffix, value in [
-            ("start_hour", start_hour),
-            ("start_minute", start_minute),
-            ("end_hour", end_hour),
-            ("end_minute", end_minute),
-        ]:
-            await _call_entity_service("number", "set_value", {
-                "entity_id": f"number.neovolt_{device_name}_{prefix}_{suffix}",
-                "value": value,
-            })
-
-    async def handle_force_charge(call: ServiceCall) -> None:
-        target = _get_target_device(hass, call.data.get("device_name"))
-        device_name = target["device_name"]
-        await _call_entity_service("number", "set_value", {
-            "entity_id": f"number.neovolt_{device_name}_dispatch_power",
-            "value": call.data.get("power_kw", 1.0),
-        })
-        await _call_entity_service("number", "set_value", {
-            "entity_id": f"number.neovolt_{device_name}_dispatch_duration",
-            "value": call.data.get("duration_minutes", 5),
-        })
-        await _call_entity_service("number", "set_value", {
-            "entity_id": f"number.neovolt_{device_name}_dispatch_charge_soc",
-            "value": call.data.get("target_soc", 100),
-        })
-        await _call_entity_service("select", "select_option", {
-            "entity_id": f"select.neovolt_{device_name}_dispatch_mode",
-            "option": "Force Charge",
-        })
-
-    async def handle_force_discharge(call: ServiceCall) -> None:
-        target = _get_target_device(hass, call.data.get("device_name"))
-        device_name = target["device_name"]
-        await _call_entity_service("number", "set_value", {
-            "entity_id": f"number.neovolt_{device_name}_dispatch_power",
-            "value": call.data.get("power_kw", 1.0),
-        })
-        await _call_entity_service("number", "set_value", {
-            "entity_id": f"number.neovolt_{device_name}_dispatch_duration",
-            "value": call.data.get("duration_minutes", 5),
-        })
-        await _call_entity_service("number", "set_value", {
-            "entity_id": f"number.neovolt_{device_name}_dispatch_discharge_soc",
-            "value": call.data.get("cutoff_soc", 20),
-        })
-        await _call_entity_service("select", "select_option", {
-            "entity_id": f"select.neovolt_{device_name}_dispatch_mode",
-            "option": "Force Discharge",
-        })
-
-    async def handle_return_to_normal(call: ServiceCall) -> None:
-        target = _get_target_device(hass, call.data.get("device_name"))
-        device_name = target["device_name"]
-        await _call_entity_service("select", "select_option", {
-            "entity_id": f"select.neovolt_{device_name}_dispatch_mode",
-            "option": "Normal",
-        })
-
-    async def handle_set_grid_power_offset(call: ServiceCall) -> None:
-        target = _get_target_device(hass, call.data.get("device_name"))
-        device_name = target["device_name"]
-        await _call_entity_service("number", "set_value", {
-            "entity_id": f"number.neovolt_{device_name}_grid_power_offset",
-            "value": call.data.get("offset_w", 0),
-        })
-
-    async def handle_set_schedule_window(call: ServiceCall) -> None:
-        target = _get_target_device(hass, call.data.get("device_name"))
-        device_name = target["device_name"]
-        mode = call.data["mode"]
-        window = int(call.data.get("window", 1))
-        start_hour = int(call.data.get("start_hour", 0))
-        start_minute = int(call.data.get("start_minute", 0))
-        end_hour = int(call.data.get("end_hour", 0))
-        end_minute = int(call.data.get("end_minute", 0))
-        await _apply_schedule_window(device_name, mode, window, start_hour, start_minute, end_hour, end_minute)
-
-    async def handle_set_schedule_window_hhmm(call: ServiceCall) -> None:
-        def parse_time(text: str) -> tuple[int, int]:
-            hour_text, minute_text = text.split(":", 1)
-            return int(hour_text), int(minute_text)
-
-        target = _get_target_device(hass, call.data.get("device_name"))
-        device_name = target["device_name"]
-        start_hour, start_minute = parse_time(call.data["start_time"])
-        end_hour, end_minute = parse_time(call.data["end_time"])
-        await _apply_schedule_window(
-            device_name,
-            call.data["mode"],
-            int(call.data.get("window", 1)),
-            start_hour,
-            start_minute,
-            end_hour,
-            end_minute,
-        )
-
-    async def handle_set_immediate_control(call: ServiceCall) -> None:
-        target = _get_target_device(hass, call.data.get("device_name"))
-        client = target["client"]
-        coordinator = target["coordinator"]
-        if "system_mode" in call.data:
-            value = IMMEDIATE_MODE_OPTIONS[call.data["system_mode"]]
-            await hass.async_add_executor_job(client.write_register, 0x071C, value)
-            coordinator.set_optimistic_value("system_mode", value)
-        if "battery_mode" in call.data:
-            value = IMMEDIATE_MODE_OPTIONS[call.data["battery_mode"]]
-            await hass.async_add_executor_job(client.write_register, 0x072D, value)
-            coordinator.set_optimistic_value("battery_mode", value)
-        if "battery_power_setpoint_w" in call.data:
-            value = int(call.data["battery_power_setpoint_w"])
-            if value < 0:
-                value = value & 0xFFFF
-            await hass.async_add_executor_job(client.write_register, 0x072E, value)
-            coordinator.set_optimistic_value("battery_power_setpoint", int(call.data["battery_power_setpoint_w"]))
-        if "inverter_output_power_limit_w" in call.data:
-            value = int(call.data["inverter_output_power_limit_w"])
-            await hass.async_add_executor_job(client.write_register, 0x072F, value)
-            coordinator.set_optimistic_value("inverter_output_power_limit", value)
-        await coordinator.async_request_refresh()
-
-    hass.services.async_register(DOMAIN, SERVICE_FORCE_CHARGE, handle_force_charge)
-    hass.services.async_register(DOMAIN, SERVICE_FORCE_DISCHARGE, handle_force_discharge)
-    hass.services.async_register(DOMAIN, SERVICE_RETURN_TO_NORMAL, handle_return_to_normal)
-    hass.services.async_register(DOMAIN, SERVICE_SET_GRID_POWER_OFFSET, handle_set_grid_power_offset)
-    hass.services.async_register(DOMAIN, SERVICE_SET_SCHEDULE_WINDOW, handle_set_schedule_window)
-    hass.services.async_register(DOMAIN, SERVICE_SET_SCHEDULE_WINDOW_HHMM, handle_set_schedule_window_hhmm)
-    hass.services.async_register(DOMAIN, SERVICE_SET_IMMEDIATE_CONTROL, handle_set_immediate_control)

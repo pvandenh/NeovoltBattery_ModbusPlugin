@@ -39,11 +39,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PREFERRED_GRID_SENSOR_CANDIDATES = (
-    "sensor.grid_consumption",
-    "sensor.site_grid_power",
-)
-
 
 def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -> float:
     """
@@ -72,25 +67,6 @@ def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -
         return default
     except Exception:
         return default
-
-
-def get_preferred_grid_power(hass: HomeAssistant, coordinator_data: dict, default_key: str = "grid_power_total") -> tuple[float | None, str]:
-    """Return the best available signed grid power and its source.
-
-    Preferred source is the existing HA site/grid sensor when available because it
-    better matches the broader energy optimiser flow. Fallback remains the direct
-    inverter Modbus grid register.
-    """
-    for entity_id in PREFERRED_GRID_SENSOR_CANDIDATES:
-        entity = hass.states.get(entity_id)
-        if entity and entity.state not in ("unknown", "unavailable", "None", None, ""):
-            try:
-                return float(entity.state), entity_id
-            except (ValueError, TypeError):
-                continue
-
-    value = coordinator_data.get(default_key)
-    return value, default_key
 
 
 def soc_percent_to_register(soc_percent: float) -> int:
@@ -308,7 +284,7 @@ class DynamicExportManager:
         # ── Grid power (signed, W) ────────────────────────────────────────────
         # Authoritative system-wide net power — incorporates all inverters,
         # all house loads and all PV without needing to read them individually.
-        grid_power_w, grid_source = get_preferred_grid_power(self._hass, data)
+        grid_power_w = data.get("grid_power_total")
         if grid_power_w is None:
             _LOGGER.warning("Cannot calculate Dynamic Export — grid_power_total unavailable")
             return
@@ -348,7 +324,6 @@ class DynamicExportManager:
             _LOGGER.debug(
                 f"Dynamic Export [Method A — host+follower]: "
                 f"Target={target_export_w:.0f}W, Grid={grid_power_w:.0f}W, "
-                f"Source={grid_source}, "
                 f"GridError={grid_error_w:.0f}W, CombinedBattery={combined_battery_w:.0f}W, "
                 f"BatteryNeeded={battery_power_needed_kw:.2f}kW"
             )
@@ -359,7 +334,6 @@ class DynamicExportManager:
             _LOGGER.debug(
                 f"Dynamic Export [Method B — host only]: "
                 f"Target={target_export_w:.0f}W, Grid={grid_power_w:.0f}W, "
-                f"Source={grid_source}, "
                 f"GridError={grid_error_w:.0f}W, LastCmd={self._last_commanded_power_kw:.2f}kW, "
                 f"Delta={delta_kw:.2f}kW, BatteryNeeded={battery_power_needed_kw:.2f}kW"
             )
@@ -391,7 +365,7 @@ class DynamicExportManager:
             _LOGGER.info(
                 f"Dynamic Export: Discharging battery at {discharge_power_kw:.2f}kW "
                 f"(Grid={grid_power_w/1000:.2f}kW, Export={current_export_w/1000:.2f}kW, "
-                f"Target={target_export_kw:.2f}kW, Source={grid_source})"
+                f"Target={target_export_kw:.2f}kW)"
             )
             await self._send_discharge_command(discharge_power_kw, soc_cutoff)
             self._last_commanded_power_kw = discharge_power_kw
@@ -402,7 +376,7 @@ class DynamicExportManager:
             _LOGGER.info(
                 f"Dynamic Export: Charging battery at {charge_power_kw:.2f}kW to absorb excess "
                 f"(Grid={grid_power_w/1000:.2f}kW, Export={current_export_w/1000:.2f}kW, "
-                f"Target={target_export_kw:.2f}kW, Source={grid_source})"
+                f"Target={target_export_kw:.2f}kW)"
             )
             await self._send_charge_command(charge_power_kw, 100)
             self._last_commanded_power_kw = -charge_power_kw
@@ -764,7 +738,7 @@ class DynamicImportManager:
         # ── Grid power (signed, W) ────────────────────────────────────────────
         # Authoritative system-wide net power — incorporates all inverters,
         # all house loads and all PV without needing to read them individually.
-        grid_power_w, grid_source = get_preferred_grid_power(self._hass, data)
+        grid_power_w = data.get("grid_power_total")
         if grid_power_w is None:
             _LOGGER.warning("Cannot calculate Dynamic Import — grid_power_total unavailable")
             return
@@ -808,7 +782,6 @@ class DynamicImportManager:
             _LOGGER.debug(
                 f"Dynamic Import [Method A — host+follower]: "
                 f"Target={target_import_w:.0f}W, Grid={grid_power_w:.0f}W, "
-                f"Source={grid_source}, "
                 f"GridError={grid_error_w:.0f}W, CombinedBattery={combined_battery_w:.0f}W, "
                 f"ChargeNeeded={battery_charge_needed_kw:.2f}kW"
             )
@@ -819,7 +792,6 @@ class DynamicImportManager:
             _LOGGER.debug(
                 f"Dynamic Import [Method B — host only]: "
                 f"Target={target_import_w:.0f}W, Grid={grid_power_w:.0f}W, "
-                f"Source={grid_source}, "
                 f"GridError={grid_error_w:.0f}W, LastCmd={self._last_commanded_power_kw:.2f}kW, "
                 f"Delta={delta_kw:.2f}kW, ChargeNeeded={battery_charge_needed_kw:.2f}kW"
             )

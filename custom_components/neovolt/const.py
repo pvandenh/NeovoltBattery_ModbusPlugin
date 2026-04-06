@@ -116,12 +116,9 @@ REGISTER_BLOCKS = {
     "pv": RegisterBlock("pv", 0x0090, 20),
     "battery": RegisterBlock("battery", 0x0100, 40),
     "inverter": RegisterBlock("inverter", 0x0500, 110),
-    "parallel_versions": RegisterBlock("parallel_versions", 0x0640, 10),
     "pv_inverter_energy": RegisterBlock("pv_inverter_energy", 0x08D0, 6),  # Extended to include system_fault at 0x08D4
-    "settings": RegisterBlock("settings", 0x0800, 99),
+    "settings": RegisterBlock("settings", 0x0800, 86),
     "dispatch": RegisterBlock("dispatch", 0x0880, 11),  # Para1-Para8 (11 registers)
-    "safety_config": RegisterBlock("safety_config", 0x1000, 1),
-    "parallel_config": RegisterBlock("parallel_config", 0x3090, 3),
     "calibration": RegisterBlock("calibration", 0x11D3, 3),  # AlphaESS-shared: point1, coef1, offset1
 }
 

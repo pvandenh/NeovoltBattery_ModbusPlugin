@@ -129,8 +129,6 @@ async def async_setup_entry(
         NeovoltTimePeriodControlSelect(coordinator, device_info, device_name, client, hass),
         NeovoltDispatchModeSelect(coordinator, device_info, device_name, client, hass),
         NeovoltPVSwitchSelect(coordinator, device_info, device_name, client, hass),
-        NeovoltImmediateSystemModeSelect(coordinator, device_info, device_name, client, hass),
-        NeovoltImmediateBatteryModeSelect(coordinator, device_info, device_name, client, hass),
     ]
 
     async_add_entities(selects)
@@ -664,59 +662,3 @@ class NeovoltPVSwitchSelect(CoordinatorEntity, SelectEntity):
 
         except Exception as e:
             _LOGGER.error(f"Failed to set PV switch to '{option}': {e}")
-
-
-class _BaseImmediateModeSelect(CoordinatorEntity, SelectEntity):
-    _option_to_value = {
-        "Auto/Normal": 0,
-        "Charge": 1,
-        "Discharge": 2,
-        "Standby": 3,
-    }
-    _value_to_option = {v: k for k, v in _option_to_value.items()}
-    _attr_options = list(_option_to_value.keys())
-    _register = 0
-    _data_key = ""
-
-    def __init__(self, coordinator, device_info, device_name, client, hass, name_suffix, unique_suffix, icon):
-        super().__init__(coordinator)
-        self._client = client
-        self._hass = hass
-        self._attr_name = f"Neovolt {device_name} {name_suffix}"
-        self._attr_unique_id = f"neovolt_{device_name}_{unique_suffix}"
-        self._attr_icon = icon
-        self._attr_device_info = device_info
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.has_valid_data and self._data_key in self.coordinator.data
-
-    @property
-    def current_option(self):
-        value = self.coordinator.data.get(self._data_key, 0)
-        return self._value_to_option.get(value, f"Unknown ({value})")
-
-    async def async_select_option(self, option: str) -> None:
-        if option not in self._option_to_value:
-            _LOGGER.error("Invalid option '%s' for %s", option, self._attr_name)
-            return
-        value = self._option_to_value[option]
-        await self._hass.async_add_executor_job(self._client.write_register, self._register, value)
-        self.coordinator.set_optimistic_value(self._data_key, value)
-        await self.coordinator.async_request_refresh()
-
-
-class NeovoltImmediateSystemModeSelect(_BaseImmediateModeSelect):
-    _register = 0x071C
-    _data_key = "system_mode"
-
-    def __init__(self, coordinator, device_info, device_name, client, hass):
-        super().__init__(coordinator, device_info, device_name, client, hass, "System Mode", "system_mode", "mdi:cog-transfer")
-
-
-class NeovoltImmediateBatteryModeSelect(_BaseImmediateModeSelect):
-    _register = 0x072D
-    _data_key = "battery_mode"
-
-    def __init__(self, coordinator, device_info, device_name, client, hass):
-        super().__init__(coordinator, device_info, device_name, client, hass, "Battery Mode", "battery_mode", "mdi:battery-cog")

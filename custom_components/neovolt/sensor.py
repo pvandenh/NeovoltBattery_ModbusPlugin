@@ -13,7 +13,6 @@ from homeassistant.const import (
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfFrequency,
-    UnitOfTime,
     UnitOfTemperature,
     PERCENTAGE,
 )
@@ -48,30 +47,6 @@ from .const import (
     INVERTER_FAULT_EXT_BITS,
     SYSTEM_FAULT_BITS,
 )
-
-GRID_REGULATION_MAP = {
-    0: "VDE0126-50Hz",
-    1: "VDE4105/11.18",
-    2: "AS4777.2",
-    3: "G83_2",
-    4: "C10/C11",
-    5: "TOR Erzeuger",
-    6: "EN50549-NL",
-    7: "EN50549-DK",
-}
-
-PARALLEL_MODE_MAP = {
-    0: "Single",
-    1: "Follower",
-    2: "Master",
-}
-
-METER_CT_SELECT_MAP = {
-    0: "Grid&PV use CT",
-    1: "Grid CT, PV Meter",
-    2: "Grid Meter, PV CT",
-    3: "Grid&PV use Meter",
-}
 
 
 async def async_setup_entry(
@@ -249,65 +224,15 @@ async def async_setup_entry(
         # Settings/Status
         NeovoltSensor(coordinator, device_info, device_name, "max_feed_to_grid", "Max Feed to Grid",
                      PERCENTAGE, None, SensorStateClass.MEASUREMENT, "mdi:transmission-tower-export"),
-        NeovoltSensor(coordinator, device_info, device_name, "settings_system_mode", "Settings System Mode",
-                     None, None, None, "mdi:cog"),
-        NeovoltSensor(coordinator, device_info, device_name, "meter_ct_select", "Meter CT Select",
-                     None, None, None, "mdi:meter-electric"),
-        NeovoltSensor(coordinator, device_info, device_name, "battery_ready", "Battery Ready",
-                     None, None, None, "mdi:battery-check"),
-        NeovoltSensor(coordinator, device_info, device_name, "grid_meter_negate", "Grid Meter Negate",
-                     None, None, None, "mdi:swap-horizontal"),
-        NeovoltSensor(coordinator, device_info, device_name, "pv_meter_negate", "PV Meter Negate",
-                     None, None, None, "mdi:swap-horizontal-bold"),
-        NeovoltSensor(coordinator, device_info, device_name, "grid_regulation", "Grid Regulation",
-                     None, None, None, "mdi:transmission-tower"),
-        NeovoltSensor(coordinator, device_info, device_name, "parallel_mode", "Parallel Mode",
-                     None, None, None, "mdi:set-center-right"),
-        NeovoltSensor(coordinator, device_info, device_name, "battery_upgrade_select", "Battery Upgrade Select",
-                     None, None, None, "mdi:battery-sync"),
-        NeovoltSensor(coordinator, device_info, device_name, "battery_soc_calibration", "Battery SOC Calibration",
-                     None, None, None, "mdi:battery-heart-variant"),
-        NeovoltSensor(coordinator, device_info, device_name, "master_software_version", "Master Software Version",
-                     None, None, None, "mdi:information-outline"),
-        NeovoltSensor(coordinator, device_info, device_name, "slave_software_version", "Slave Software Version",
-                     None, None, None, "mdi:information-variant"),
-        NeovoltDecodedSensor(coordinator, device_info, device_name, "grid_regulation", "Grid Regulation Label",
-                     GRID_REGULATION_MAP, "mdi:transmission-tower"),
-        NeovoltDecodedSensor(coordinator, device_info, device_name, "parallel_mode", "Parallel Mode Label",
-                     PARALLEL_MODE_MAP, "mdi:set-center-right"),
-        NeovoltDecodedSensor(coordinator, device_info, device_name, "meter_ct_select", "Meter CT Select Label",
-                     METER_CT_SELECT_MAP, "mdi:meter-electric"),
-        NeovoltSensor(coordinator, device_info, device_name, "system_mode", "System Mode Raw",
-                     None, None, None, "mdi:cog-transfer"),
-        NeovoltSensor(coordinator, device_info, device_name, "battery_mode", "Battery Mode Raw",
-                     None, None, None, "mdi:battery-cog"),
-        NeovoltSensor(coordinator, device_info, device_name, "battery_power_setpoint", "Battery Power Setpoint",
-                     UnitOfPower.WATT, SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT, "mdi:battery-arrow-up-outline"),
-        NeovoltSensor(coordinator, device_info, device_name, "inverter_output_power_limit", "Inverter Output Power Limit",
-                     UnitOfPower.WATT, SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT, "mdi:sine-wave"),
-        NeovoltSensor(coordinator, device_info, device_name, "local_ip", "Local IP",
-                     None, None, None, "mdi:ip-network"),
-        NeovoltSensor(coordinator, device_info, device_name, "modbus_address", "Modbus Address",
-                     None, None, None, "mdi:identifier"),
         NeovoltSensor(coordinator, device_info, device_name, "charging_cutoff_soc", "Charging Cutoff SOC",
                      PERCENTAGE, None, SensorStateClass.MEASUREMENT, "mdi:battery-charging-high"),
         NeovoltSensor(coordinator, device_info, device_name, "discharging_cutoff_soc", "Discharging Cutoff SOC",
                      PERCENTAGE, None, SensorStateClass.MEASUREMENT, "mdi:battery-charging-low"),
-        NeovoltSensor(coordinator, device_info, device_name, "ups_reserve_enable", "UPS Reserve Enable",
-                     None, None, None, "mdi:battery-lock"),
         NeovoltSensor(coordinator, device_info, device_name, "dispatch_start", "Dispatch Start",
                      None, None, None, "mdi:play-circle"),
         NeovoltSensor(coordinator, device_info, device_name, "dispatch_power", "Dispatch Power",
                      UnitOfPower.WATT, SensorDeviceClass.POWER,
                      SensorStateClass.MEASUREMENT, "mdi:flash"),
-        NeovoltSensor(coordinator, device_info, device_name, "dispatch_time_remaining", "Dispatch Time Remaining",
-                     UnitOfTime.SECONDS, None, SensorStateClass.MEASUREMENT, "mdi:timer-outline"),
-        NeovoltSensor(coordinator, device_info, device_name, "dispatch_energy_routing", "Dispatch Energy Routing",
-                     None, None, None, "mdi:vector-polyline"),
-        NeovoltSensor(coordinator, device_info, device_name, "dispatch_pv_switch", "Dispatch PV Switch Raw",
-                     None, None, None, "mdi:solar-panel"),
-        NeovoltScheduleSummarySensor(coordinator, device_info, device_name, "charge"),
-        NeovoltScheduleSummarySensor(coordinator, device_info, device_name, "discharge"),
         NeovoltDispatchStatusSensor(coordinator, device_info, device_name),
 
         # Grid power calibration offset readback (AlphaESS shared firmware, register 0x11D5)
@@ -569,32 +494,6 @@ class NeovoltCalculatedSensor(CoordinatorEntity, SensorEntity):
         return attrs
 
 
-class NeovoltDecodedSensor(CoordinatorEntity, SensorEntity):
-    """Representation of a decoded label sensor from a raw integer value."""
-
-    def __init__(self, coordinator, device_info, device_name, key, name, value_map, icon):
-        super().__init__(coordinator)
-        self._key = key
-        self._value_map = value_map
-        self._attr_name = f"Neovolt {device_name} {name}"
-        self._attr_unique_id = f"neovolt_{device_name}_{key}_label"
-        self._attr_icon = icon
-        self._attr_device_info = device_info
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.has_valid_data and self._key in self.coordinator.data
-
-    @property
-    def native_value(self):
-        raw = self.coordinator.data.get(self._key)
-        return self._value_map.get(raw, f"Unknown ({raw})")
-
-    @property
-    def extra_state_attributes(self):
-        return {"raw_value": self.coordinator.data.get(self._key)}
-
-
 class NeovoltCombinedSensor(CoordinatorEntity, SensorEntity):
     """Combined host + follower sensor — shows system-wide totals on the host device.
 
@@ -641,44 +540,6 @@ class NeovoltCombinedSensor(CoordinatorEntity, SensorEntity):
             if age is not None:
                 attrs["data_age_seconds"] = round(age)
                 attrs["data_stale"] = age > 43200  # 12 hours
-        return attrs
-
-
-class NeovoltScheduleSummarySensor(CoordinatorEntity, SensorEntity):
-    """Human-friendly summary of the raw charge/discharge schedule registers."""
-
-    def __init__(self, coordinator, device_info, device_name, mode: str):
-        super().__init__(coordinator)
-        self._mode = mode
-        title = "Charge Schedule" if mode == "charge" else "Discharge Schedule"
-        self._attr_name = f"Neovolt {device_name} {title}"
-        self._attr_unique_id = f"neovolt_{device_name}_{mode}_schedule_summary"
-        self._attr_icon = "mdi:calendar-clock"
-        self._attr_device_info = device_info
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.has_valid_data
-
-    @property
-    def native_value(self):
-        def fmt(window: int) -> str:
-            sh = int(self.coordinator.data.get(f"{self._mode}_window_{window}_start_hour", 0) or 0)
-            sm = int(self.coordinator.data.get(f"{self._mode}_window_{window}_start_minute", 0) or 0)
-            eh = int(self.coordinator.data.get(f"{self._mode}_window_{window}_end_hour", 0) or 0)
-            em = int(self.coordinator.data.get(f"{self._mode}_window_{window}_end_minute", 0) or 0)
-            return f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}"
-
-        return f"W1 {fmt(1)}, W2 {fmt(2)}"
-
-    @property
-    def extra_state_attributes(self):
-        attrs = {}
-        for window in (1, 2):
-            attrs[f"window_{window}_start_hour"] = self.coordinator.data.get(f"{self._mode}_window_{window}_start_hour")
-            attrs[f"window_{window}_start_minute"] = self.coordinator.data.get(f"{self._mode}_window_{window}_start_minute")
-            attrs[f"window_{window}_end_hour"] = self.coordinator.data.get(f"{self._mode}_window_{window}_end_hour")
-            attrs[f"window_{window}_end_minute"] = self.coordinator.data.get(f"{self._mode}_window_{window}_end_minute")
         return attrs
 
 
