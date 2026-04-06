@@ -21,6 +21,8 @@ from .const import (
     DYNAMIC_EXPORT_MIN_POWER,
     DYNAMIC_EXPORT_MAX_POWER,
     DEVICE_ROLE_FOLLOWER,
+    GRID_POWER_OFFSET_MIN,
+    GRID_POWER_OFFSET_MAX,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,6 +65,36 @@ async def async_setup_entry(
             coordinator, device_info, device_name, client, hass,
             "discharging_cutoff_soc", "Discharging Cutoff SOC (Default)",
             4, 100, 1, PERCENTAGE, 0x0850, True
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "ups_reserve_enable", "UPS Reserve Enable",
+            0, 1, 1, None, 0x0862, True,
+            icon="mdi:battery-lock"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "meter_ct_select", "Meter CT Select",
+            0, 3, 1, None, 0x0806, True,
+            icon="mdi:meter-electric"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "grid_meter_negate", "Grid Meter Negate",
+            0, 1, 1, None, 0x0812, True,
+            icon="mdi:swap-horizontal"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "pv_meter_negate", "PV Meter Negate",
+            0, 1, 1, None, 0x0813, True,
+            icon="mdi:swap-horizontal-bold"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "parallel_mode", "Parallel Mode",
+            0, 2, 1, None, 0x3090, True,
+            icon="mdi:set-center-right"
         ),
 
         # Consolidated Dispatch Controls (local storage, used by dispatch mode select)
@@ -112,6 +144,111 @@ async def async_setup_entry(
             0, max_charge_power * 1000, 100, UnitOfPower.WATT, 0x0801, True,
             icon="mdi:solar-power", config_entry=entry, is_32bit=True
         ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "battery_power_setpoint", "Battery Power Setpoint",
+            -10000, 10000, 100, UnitOfPower.WATT, 0x072E, True,
+            icon="mdi:battery-arrow-up-outline", signed_write=True
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "inverter_output_power_limit", "Inverter Output Power Limit",
+            0, 10000, 100, UnitOfPower.WATT, 0x072F, True,
+            icon="mdi:sine-wave"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "grid_power_offset", "Grid Power Offset",
+            GRID_POWER_OFFSET_MIN, GRID_POWER_OFFSET_MAX, 1, UnitOfPower.WATT, 0x11D5, True,
+            icon="mdi:tune", availability_key="grid_power_offset_supported", signed_write=True
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "dispatch_energy_routing", "Dispatch Energy Routing",
+            0, 255, 1, None, None, True,
+            default_value=255, icon="mdi:vector-polyline",
+            dispatch_block_write=True
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "discharge_window_1_start_hour", "Discharge Window 1 Start Hour",
+            0, 23, 1, None, 0x0851, True, icon="mdi:clock-start"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "discharge_window_1_end_hour", "Discharge Window 1 End Hour",
+            0, 23, 1, None, 0x0852, True, icon="mdi:clock-end"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "discharge_window_2_start_hour", "Discharge Window 2 Start Hour",
+            0, 23, 1, None, 0x0853, True, icon="mdi:clock-start"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "discharge_window_2_end_hour", "Discharge Window 2 End Hour",
+            0, 23, 1, None, 0x0854, True, icon="mdi:clock-end"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "charge_window_1_start_hour", "Charge Window 1 Start Hour",
+            0, 23, 1, None, 0x0856, True, icon="mdi:clock-start"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "charge_window_1_end_hour", "Charge Window 1 End Hour",
+            0, 23, 1, None, 0x0857, True, icon="mdi:clock-end"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "charge_window_2_start_hour", "Charge Window 2 Start Hour",
+            0, 23, 1, None, 0x0858, True, icon="mdi:clock-start"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "charge_window_2_end_hour", "Charge Window 2 End Hour",
+            0, 23, 1, None, 0x0859, True, icon="mdi:clock-end"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "discharge_window_1_start_minute", "Discharge Window 1 Start Minute",
+            0, 59, 1, None, 0x085A, True, icon="mdi:clock-outline"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "discharge_window_1_end_minute", "Discharge Window 1 End Minute",
+            0, 59, 1, None, 0x085B, True, icon="mdi:clock-outline"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "discharge_window_2_start_minute", "Discharge Window 2 Start Minute",
+            0, 59, 1, None, 0x085C, True, icon="mdi:clock-outline"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "discharge_window_2_end_minute", "Discharge Window 2 End Minute",
+            0, 59, 1, None, 0x085D, True, icon="mdi:clock-outline"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "charge_window_1_start_minute", "Charge Window 1 Start Minute",
+            0, 59, 1, None, 0x085E, True, icon="mdi:clock-outline"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "charge_window_1_end_minute", "Charge Window 1 End Minute",
+            0, 59, 1, None, 0x085F, True, icon="mdi:clock-outline"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "charge_window_2_start_minute", "Charge Window 2 Start Minute",
+            0, 59, 1, None, 0x0860, True, icon="mdi:clock-outline"
+        ),
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "charge_window_2_end_minute", "Charge Window 2 End Minute",
+            0, 59, 1, None, 0x0861, True, icon="mdi:clock-outline"
+        ),
 
     ]
 
@@ -142,6 +279,9 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         is_32bit=False,
         scale=1,
         fixed_max=False
+        ,availability_key=None,
+        signed_write=False,
+        dispatch_block_write=False,
     ):
         """Initialize the number entity."""
         super().__init__(coordinator)
@@ -154,6 +294,9 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         self._is_32bit = is_32bit
         self._scale = scale
         self._fixed_max = fixed_max  # If True, max value is fixed and won't update from config
+        self._availability_key = availability_key
+        self._signed_write = signed_write
+        self._dispatch_block_write = dispatch_block_write
         self._attr_name = f"Neovolt {device_name} {name}"
         self._attr_unique_id = f"neovolt_{device_name}_{key}"
         self._attr_native_min_value = min_val
@@ -173,7 +316,11 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     @property
     def available(self) -> bool:
         """Return True if coordinator has valid cached data."""
-        return self.coordinator.has_valid_data
+        if not self.coordinator.has_valid_data:
+            return False
+        if self._availability_key is None:
+            return True
+        return bool(self.coordinator.data.get(self._availability_key))
 
     @property
     def native_max_value(self) -> float:
@@ -210,7 +357,36 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
         try:
-            if self._write_to_modbus and self._address:
+            if self._dispatch_block_write:
+                data = self.coordinator.data
+                dispatch_power = data.get("dispatch_power", 0)
+                if dispatch_power < 0:
+                    para2_lo = 32000 + dispatch_power
+                elif dispatch_power > 0:
+                    para2_lo = 32000 + dispatch_power
+                else:
+                    para2_lo = 32000
+
+                values = [
+                    data.get("dispatch_start", 0),
+                    0,
+                    para2_lo,
+                    0,
+                    0,
+                    data.get("dispatch_mode", 0),
+                    data.get("dispatch_soc", 0),
+                    0,
+                    data.get("dispatch_time_remaining", 90),
+                    int(value),
+                    data.get("dispatch_pv_switch", 0),
+                ]
+                _LOGGER.info("Writing dispatch energy routing %s via dispatch block", int(value))
+                await self._hass.async_add_executor_job(
+                    self._client.write_registers, 0x0880, values
+                )
+                self.coordinator.set_optimistic_value(self._key, int(value))
+                await self.coordinator.async_request_refresh()
+            elif self._write_to_modbus and self._address:
                 if self._is_32bit:
                     # 32-bit write: convert to scaled value and split into high/low words
                     scaled_value = int(value * self._scale)
@@ -225,9 +401,12 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
                     )
                 else:
                     # Single register write
+                    register_value = int(value)
+                    if self._signed_write and register_value < 0:
+                        register_value = register_value & 0xFFFF
                     _LOGGER.info(f"Writing {value} to Modbus register {hex(self._address)} for {self._key}")
                     await self._hass.async_add_executor_job(
-                        self._client.write_register, self._address, int(value)
+                        self._client.write_register, self._address, register_value
                     )
                 # Optimistic update - show expected value immediately
                 self.coordinator.set_optimistic_value(self._key, value)

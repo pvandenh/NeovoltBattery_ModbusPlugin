@@ -1,0 +1,118 @@
+force_charge:
+  name: Force charge
+  description: Start a timed force-charge dispatch.
+  fields:
+    device_name:
+      description: Optional Neovolt device_name. Defaults to the first host device.
+      example: "1"
+    power_kw:
+      description: Charge power in kW.
+      example: 1.0
+    duration_minutes:
+      description: Duration in minutes.
+      example: 5
+    target_soc:
+      description: Charge target SOC in percent.
+      example: 80
+
+force_discharge:
+  name: Force discharge
+  description: Start a timed force-discharge dispatch.
+  fields:
+    device_name:
+      description: Optional Neovolt device_name. Defaults to the first host device.
+      example: "1"
+    power_kw:
+      description: Discharge power in kW.
+      example: 5.0
+    duration_minutes:
+      description: Duration in minutes.
+      example: 30
+    cutoff_soc:
+      description: Minimum SOC cutoff in percent.
+      example: 20
+
+return_to_normal:
+  name: Return to normal
+  description: Return the inverter dispatch mode to Normal.
+  fields:
+    device_name:
+      description: Optional Neovolt device_name. Defaults to the first host device.
+      example: "1"
+
+set_grid_power_offset:
+  name: Set grid power offset
+  description: Write the signed grid-power calibration offset in watts.
+  fields:
+    device_name:
+      description: Optional Neovolt device_name. Defaults to the first host device.
+      example: "1"
+    offset_w:
+      description: Signed grid offset in watts.
+      example: -25
+
+set_schedule_window:
+  name: Set schedule window
+  description: Write one raw charge/discharge schedule window.
+  fields:
+    device_name:
+      description: Optional Neovolt device_name. Defaults to the first host device.
+      example: "1"
+    mode:
+      description: Schedule family, charge or discharge.
+      example: charge
+    window:
+      description: Window number, 1 or 2.
+      example: 1
+    start_hour:
+      description: Start hour 0-23.
+      example: 13
+    start_minute:
+      description: Start minute 0-59.
+      example: 0
+    end_hour:
+      description: End hour 0-23.
+      example: 14
+    end_minute:
+      description: End minute 0-59.
+      example: 30
+
+set_schedule_window_hhmm:
+  name: Set schedule window HHMM
+  description: Write one raw charge/discharge schedule window using HH:MM strings.
+  fields:
+    device_name:
+      description: Optional Neovolt device_name. Defaults to the first host device.
+      example: "1"
+    mode:
+      description: Schedule family, charge or discharge.
+      example: discharge
+    window:
+      description: Window number, 1 or 2.
+      example: 1
+    start_time:
+      description: Start time HH:MM.
+      example: "17:30"
+    end_time:
+      description: End time HH:MM.
+      example: "19:30"
+
+set_immediate_control:
+  name: Set immediate control
+  description: Write one or more immediate AlphaESS-style control registers.
+  fields:
+    device_name:
+      description: Optional Neovolt device_name. Defaults to the first host device.
+      example: "1"
+    system_mode:
+      description: System mode select option.
+      example: Discharge
+    battery_mode:
+      description: Battery mode select option.
+      example: Auto/Normal
+    battery_power_setpoint_w:
+      description: Signed battery power setpoint in watts.
+      example: 500
+    inverter_output_power_limit_w:
+      description: Inverter output power limit in watts.
+      example: 5000
