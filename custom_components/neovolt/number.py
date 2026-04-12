@@ -21,6 +21,8 @@ from .const import (
     DYNAMIC_EXPORT_MIN_POWER,
     DYNAMIC_EXPORT_MAX_POWER,
     DEVICE_ROLE_FOLLOWER,
+    GRID_POWER_OFFSET_MIN,
+    GRID_POWER_OFFSET_MAX,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,6 +65,19 @@ async def async_setup_entry(
             coordinator, device_info, device_name, client, hass,
             "discharging_cutoff_soc", "Discharging Cutoff SOC (Default)",
             4, 100, 1, PERCENTAGE, 0x0850, True
+        ),
+
+        # Grid power calibration offset (signed 16-bit, AlphaESS calibration block 0x11D3)
+        # Only shown when the calibration register block is confirmed to respond.
+        # Positive value: inverter thinks it's importing more → discharges harder → reduces grid import.
+        # Negative value: shifts balance toward import.
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "grid_power_offset", "Grid Power Offset",
+            GRID_POWER_OFFSET_MIN, GRID_POWER_OFFSET_MAX, 1, UnitOfPower.WATT, 0x11D5, True,
+            icon="mdi:tune",
+            availability_key="grid_power_offset_supported",
+            signed_write=True,
         ),
 
         # Consolidated Dispatch Controls (local storage, used by dispatch mode select)
@@ -112,7 +127,6 @@ async def async_setup_entry(
             0, max_charge_power * 1000, 100, UnitOfPower.WATT, 0x0801, True,
             icon="mdi:solar-power", config_entry=entry, is_32bit=True
         ),
-
     ]
 
     async_add_entities(numbers)
@@ -141,7 +155,9 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         config_entry=None,
         is_32bit=False,
         scale=1,
-        fixed_max=False
+        fixed_max=False,
+        availability_key=None,
+        signed_write=False,
     ):
         """Initialize the number entity."""
         super().__init__(coordinator)
@@ -154,6 +170,8 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
         self._is_32bit = is_32bit
         self._scale = scale
         self._fixed_max = fixed_max  # If True, max value is fixed and won't update from config
+        self._availability_key = availability_key
+        self._signed_write = signed_write
         self._attr_name = f"Neovolt {device_name} {name}"
         self._attr_unique_id = f"neovolt_{device_name}_{key}"
         self._attr_native_min_value = min_val
@@ -173,7 +191,11 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     @property
     def available(self) -> bool:
         """Return True if coordinator has valid cached data."""
-        return self.coordinator.has_valid_data
+        if not self.coordinator.has_valid_data:
+            return False
+        if self._availability_key is None:
+            return True
+        return bool(self.coordinator.data.get(self._availability_key))
 
     @property
     def native_max_value(self) -> float:
@@ -224,10 +246,13 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
                         self._client.write_registers, self._address, [high_word, low_word]
                     )
                 else:
-                    # Single register write
+                    # Single register write — handle signed values for 16-bit registers
+                    register_value = int(value)
+                    if self._signed_write and register_value < 0:
+                        register_value = register_value & 0xFFFF  # Two's complement for negative
                     _LOGGER.info(f"Writing {value} to Modbus register {hex(self._address)} for {self._key}")
                     await self._hass.async_add_executor_job(
-                        self._client.write_register, self._address, int(value)
+                        self._client.write_register, self._address, register_value
                     )
                 # Optimistic update - show expected value immediately
                 self.coordinator.set_optimistic_value(self._key, value)
