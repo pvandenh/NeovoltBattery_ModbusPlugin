@@ -7,6 +7,7 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -43,6 +44,63 @@ def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -
     """
     value, _, _ = safe_get_entity_float_with_source(hass, entity_id, default)
     return value
+
+
+def safe_get_by_unique_id(
+    hass: HomeAssistant, unique_id: str, default: float
+) -> tuple[float, bool, str]:
+    """
+    Look up a number entity by its unique_id and return its float value.
+
+    This is more reliable than looking up by entity_id, because HA generates
+    entity IDs by slugifying the device name + entity name — which varies
+    depending on how the user named their device. unique_ids are set explicitly
+    by the integration and are stable regardless of device naming.
+
+    Args:
+        hass: Home Assistant instance
+        unique_id: The unique_id as set in number.py (e.g. 'neovolt_host_dispatch_power')
+        default: Default value if entity unavailable or invalid
+
+    Returns:
+        (value, used_default, reason)
+        - value: float value from entity, or default
+        - used_default: True if the default was substituted
+        - reason: human-readable explanation of why the default was used (empty if not)
+    """
+    try:
+        registry = async_get_entity_registry(hass)
+        entry = registry.async_get_entity_id("number", DOMAIN, unique_id)
+
+        if not entry:
+            reason = f"unique_id '{unique_id}' not found in entity registry"
+            _LOGGER.debug(f"{reason}, using default: {default}")
+            return default, True, reason
+
+        entity_id = entry
+        state = hass.states.get(entity_id)
+
+        if not state:
+            reason = f"entity '{entity_id}' (unique_id='{unique_id}') not found in state machine"
+            _LOGGER.debug(f"{reason}, using default: {default}")
+            return default, True, reason
+
+        if state.state in ("unknown", "unavailable", "None", None):
+            reason = f"entity '{entity_id}' (unique_id='{unique_id}') state is '{state.state}'"
+            _LOGGER.debug(f"{reason}, using default: {default}")
+            return default, True, reason
+
+        value = float(state.state)
+        return value, False, ""
+
+    except (ValueError, TypeError) as e:
+        reason = f"unique_id '{unique_id}' state could not be converted to float: {e}"
+        _LOGGER.warning(f"{reason}. Using default: {default}")
+        return default, True, reason
+    except Exception as e:
+        reason = f"unexpected error reading unique_id '{unique_id}': {e}"
+        _LOGGER.error(f"{reason}. Using default: {default}")
+        return default, True, reason
 
 
 def safe_get_entity_float_with_source(
@@ -338,20 +396,20 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if hasattr(self.coordinator, 'dynamic_import_manager'):
             await self.coordinator.dynamic_import_manager.stop()
 
-        power, power_default, power_reason = safe_get_entity_float_with_source(
+        power, power_default, power_reason = safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_power",
+            f"neovolt_{self._device_name}_dispatch_power",
             3.0
         )
-        _duration, duration_default, duration_reason = safe_get_entity_float_with_source(
+        _duration, duration_default, duration_reason = safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_duration",
+            f"neovolt_{self._device_name}_dispatch_duration",
             120.0
         )
         duration = int(_duration)
-        _soc_target, soc_default, soc_reason = safe_get_entity_float_with_source(
+        _soc_target, soc_default, soc_reason = safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_charge_target_soc",
+            f"neovolt_{self._device_name}_dispatch_charge_soc",
             100.0
         )
         soc_target = int(_soc_target)
@@ -419,20 +477,20 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if hasattr(self.coordinator, 'dynamic_import_manager'):
             await self.coordinator.dynamic_import_manager.stop()
 
-        power, power_default, power_reason = safe_get_entity_float_with_source(
+        power, power_default, power_reason = safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_power",
+            f"neovolt_{self._device_name}_dispatch_power",
             3.0
         )
-        _duration, duration_default, duration_reason = safe_get_entity_float_with_source(
+        _duration, duration_default, duration_reason = safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_duration",
+            f"neovolt_{self._device_name}_dispatch_duration",
             120.0
         )
         duration = int(_duration)
-        _soc_cutoff, soc_default, soc_reason = safe_get_entity_float_with_source(
+        _soc_cutoff, soc_default, soc_reason = safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_discharge_cutoff_soc",
+            f"neovolt_{self._device_name}_dispatch_discharge_soc",
             10.0
         )
         soc_cutoff = int(_soc_cutoff)
@@ -558,9 +616,9 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if hasattr(self.coordinator, 'dynamic_import_manager'):
             await self.coordinator.dynamic_import_manager.stop()
 
-        _duration, duration_default, duration_reason = safe_get_entity_float_with_source(
+        _duration, duration_default, duration_reason = safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_duration",
+            f"neovolt_{self._device_name}_dispatch_duration",
             120.0
         )
         duration = int(_duration)
@@ -617,9 +675,9 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if hasattr(self.coordinator, 'dynamic_import_manager'):
             await self.coordinator.dynamic_import_manager.stop()
 
-        _duration, duration_default, duration_reason = safe_get_entity_float_with_source(
+        _duration, duration_default, duration_reason = safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_duration",
+            f"neovolt_{self._device_name}_dispatch_duration",
             120.0
         )
         duration = int(_duration)
