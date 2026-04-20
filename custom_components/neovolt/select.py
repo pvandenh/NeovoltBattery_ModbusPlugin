@@ -41,30 +41,56 @@ def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -
     Returns:
         Float value from entity state, or default if unavailable/invalid
     """
+    value, _, _ = safe_get_entity_float_with_source(hass, entity_id, default)
+    return value
+
+
+def safe_get_entity_float_with_source(
+    hass: HomeAssistant, entity_id: str, default: float
+) -> tuple[float, bool, str]:
+    """
+    Safely retrieve a float value from a Home Assistant entity, with fallback tracking.
+
+    Returns a 3-tuple of (value, used_default, reason) so callers can log a warning
+    when a hardcoded default was substituted for a missing or unavailable entity.
+    This is especially important for dispatch commands, where silently falling back
+    to 3.0 kW can cause confusing behaviour after a Home Assistant restart.
+
+    Args:
+        hass: Home Assistant instance
+        entity_id: Entity ID to retrieve
+        default: Default value if entity unavailable or invalid
+
+    Returns:
+        (value, used_default, reason)
+        - value: float value from entity, or default
+        - used_default: True if the default was substituted
+        - reason: human-readable explanation of why the default was used (empty if not)
+    """
     try:
         entity = hass.states.get(entity_id)
         if not entity:
-            _LOGGER.debug(f"Entity {entity_id} not found, using default: {default}")
-            return default
+            reason = f"entity '{entity_id}' not found in state machine"
+            _LOGGER.debug(f"{reason}, using default: {default}")
+            return default, True, reason
 
         state = entity.state
         if state in ("unknown", "unavailable", "None", None):
-            _LOGGER.debug(f"Entity {entity_id} state is {state}, using default: {default}")
-            return default
+            reason = f"entity '{entity_id}' state is '{state}'"
+            _LOGGER.debug(f"{reason}, using default: {default}")
+            return default, True, reason
 
         value = float(state)
-        return value
+        return value, False, ""
 
     except (ValueError, TypeError) as e:
-        _LOGGER.warning(
-            f"Failed to convert entity {entity_id} state to float: {e}. Using default: {default}"
-        )
-        return default
+        reason = f"entity '{entity_id}' state could not be converted to float: {e}"
+        _LOGGER.warning(f"{reason}. Using default: {default}")
+        return default, True, reason
     except Exception as e:
-        _LOGGER.error(
-            f"Unexpected error retrieving entity {entity_id}: {e}. Using default: {default}"
-        )
-        return default
+        reason = f"unexpected error reading entity '{entity_id}': {e}"
+        _LOGGER.error(f"{reason}. Using default: {default}")
+        return default, True, reason
 
 
 def soc_percent_to_register(soc_percent: float) -> int:
@@ -312,21 +338,43 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if hasattr(self.coordinator, 'dynamic_import_manager'):
             await self.coordinator.dynamic_import_manager.stop()
 
-        power = safe_get_entity_float(
+        power, power_default, power_reason = safe_get_entity_float_with_source(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_power",
             3.0
         )
-        duration = int(safe_get_entity_float(
+        _duration, duration_default, duration_reason = safe_get_entity_float_with_source(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_duration",
             120.0
-        ))
-        soc_target = int(safe_get_entity_float(
+        )
+        duration = int(_duration)
+        _soc_target, soc_default, soc_reason = safe_get_entity_float_with_source(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_charge_soc",
             100.0
-        ))
+        )
+        soc_target = int(_soc_target)
+
+        # Warn clearly if any dispatch parameter fell back to a hardcoded default.
+        # This is the most common cause of unexpected 3 kW charge/discharge commands
+        # after a Home Assistant restart, when number entities briefly show as
+        # 'unknown' before the coordinator has completed its first refresh.
+        fallbacks = []
+        if power_default:
+            fallbacks.append(f"dispatch_power={power}kW ({power_reason})")
+        if duration_default:
+            fallbacks.append(f"dispatch_duration={duration}min ({duration_reason})")
+        if soc_default:
+            fallbacks.append(f"dispatch_charge_soc={soc_target}% ({soc_reason})")
+        if fallbacks:
+            _LOGGER.warning(
+                f"Force Charge command is using fallback default(s) — "
+                f"number entity/entities were not available at dispatch time. "
+                f"Affected parameters: {'; '.join(fallbacks)}. "
+                f"To avoid this, ensure all Dispatch number entities are loaded "
+                f"before triggering Force Charge (e.g. wait for coordinator first refresh)."
+            )
 
         power_watts = int(power * 1000)
         soc_value = soc_percent_to_register(soc_target)
@@ -371,21 +419,43 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if hasattr(self.coordinator, 'dynamic_import_manager'):
             await self.coordinator.dynamic_import_manager.stop()
 
-        power = safe_get_entity_float(
+        power, power_default, power_reason = safe_get_entity_float_with_source(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_power",
             3.0
         )
-        duration = int(safe_get_entity_float(
+        _duration, duration_default, duration_reason = safe_get_entity_float_with_source(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_duration",
             120.0
-        ))
-        soc_cutoff = int(safe_get_entity_float(
+        )
+        duration = int(_duration)
+        _soc_cutoff, soc_default, soc_reason = safe_get_entity_float_with_source(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_discharge_soc",
             10.0
-        ))
+        )
+        soc_cutoff = int(_soc_cutoff)
+
+        # Warn clearly if any dispatch parameter fell back to a hardcoded default.
+        # This is the most common cause of unexpected 3 kW charge/discharge commands
+        # after a Home Assistant restart, when number entities briefly show as
+        # 'unknown' before the coordinator has completed its first refresh.
+        fallbacks = []
+        if power_default:
+            fallbacks.append(f"dispatch_power={power}kW ({power_reason})")
+        if duration_default:
+            fallbacks.append(f"dispatch_duration={duration}min ({duration_reason})")
+        if soc_default:
+            fallbacks.append(f"dispatch_discharge_soc={soc_cutoff}% ({soc_reason})")
+        if fallbacks:
+            _LOGGER.warning(
+                f"Force Discharge command is using fallback default(s) — "
+                f"number entity/entities were not available at dispatch time. "
+                f"Affected parameters: {'; '.join(fallbacks)}. "
+                f"To avoid this, ensure all Dispatch number entities are loaded "
+                f"before triggering Force Discharge (e.g. wait for coordinator first refresh)."
+            )
 
         power_watts = int(power * 1000)
         soc_value = soc_percent_to_register(soc_cutoff)
@@ -488,11 +558,17 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if hasattr(self.coordinator, 'dynamic_import_manager'):
             await self.coordinator.dynamic_import_manager.stop()
 
-        duration = int(safe_get_entity_float(
+        _duration, duration_default, duration_reason = safe_get_entity_float_with_source(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_duration",
             120.0
-        ))
+        )
+        duration = int(_duration)
+        if duration_default:
+            _LOGGER.warning(
+                f"No Battery Charge command is using fallback duration={duration}min "
+                f"({duration_reason}). Entity was not available at dispatch time."
+            )
 
         values = [
             1,                              # Para1: Dispatch start
@@ -541,11 +617,17 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if hasattr(self.coordinator, 'dynamic_import_manager'):
             await self.coordinator.dynamic_import_manager.stop()
 
-        duration = int(safe_get_entity_float(
+        _duration, duration_default, duration_reason = safe_get_entity_float_with_source(
             self._hass,
             f"number.neovolt_{self._device_name}_dispatch_duration",
             120.0
-        ))
+        )
+        duration = int(_duration)
+        if duration_default:
+            _LOGGER.warning(
+                f"Idle (No Dispatch) command is using fallback duration={duration}min "
+                f"({duration_reason}). Entity was not available at dispatch time."
+            )
 
         timeout_seconds = min(duration * 60, 65535)
 
