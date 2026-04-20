@@ -351,7 +351,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         duration = int(_duration)
         _soc_target, soc_default, soc_reason = safe_get_entity_float_with_source(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_charge_soc",
+            f"number.neovolt_{self._device_name}_dispatch_charge_target_soc",
             100.0
         )
         soc_target = int(_soc_target)
@@ -432,7 +432,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         duration = int(_duration)
         _soc_cutoff, soc_default, soc_reason = safe_get_entity_float_with_source(
             self._hass,
-            f"number.neovolt_{self._device_name}_dispatch_discharge_soc",
+            f"number.neovolt_{self._device_name}_dispatch_discharge_cutoff_soc",
             10.0
         )
         soc_cutoff = int(_soc_cutoff)
