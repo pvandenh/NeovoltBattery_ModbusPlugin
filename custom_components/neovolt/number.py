@@ -34,16 +34,29 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Neovolt numbers."""
-    device_role = hass.data[DOMAIN][entry.entry_id]["device_role"]
-
-    # Skip control entities for follower devices
-    if device_role == DEVICE_ROLE_FOLLOWER:
-        return
-
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = hass.data[DOMAIN][entry.entry_id]["device_info"]
     client = hass.data[DOMAIN][entry.entry_id]["client"]
     device_name = hass.data[DOMAIN][entry.entry_id]["device_name"]
+    device_role = hass.data[DOMAIN][entry.entry_id]["device_role"]
+
+    # Grid power offset is a calibration write available to ALL roles (host and follower).
+    # It targets the inverter's own Modbus register directly and is independent of
+    # dispatch/control operations, making it safe to expose on follower devices.
+    async_add_entities([
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "grid_power_offset", "Grid Power Offset",
+            GRID_POWER_OFFSET_MIN, GRID_POWER_OFFSET_MAX, 1, UnitOfPower.WATT, 0x11D5, True,
+            icon="mdi:tune",
+            availability_key="grid_power_offset_supported",
+            signed_write=True,
+        ),
+    ])
+
+    # All remaining control entities are host-only
+    if device_role == DEVICE_ROLE_FOLLOWER:
+        return
 
     # Get max power from config entry
     max_charge_power = entry.data.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
@@ -65,19 +78,6 @@ async def async_setup_entry(
             coordinator, device_info, device_name, client, hass,
             "discharging_cutoff_soc", "Discharging Cutoff SOC (Default)",
             4, 100, 1, PERCENTAGE, 0x0850, True
-        ),
-
-        # Grid power calibration offset (signed 16-bit, AlphaESS calibration block 0x11D3)
-        # Only shown when the calibration register block is confirmed to respond.
-        # Positive value: inverter thinks it's importing more → discharges harder → reduces grid import.
-        # Negative value: shifts balance toward import.
-        NeovoltNumber(
-            coordinator, device_info, device_name, client, hass,
-            "grid_power_offset", "Grid Power Offset",
-            GRID_POWER_OFFSET_MIN, GRID_POWER_OFFSET_MAX, 1, UnitOfPower.WATT, 0x11D5, True,
-            icon="mdi:tune",
-            availability_key="grid_power_offset_supported",
-            signed_write=True,
         ),
 
         # Consolidated Dispatch Controls (local storage, used by dispatch mode select)
