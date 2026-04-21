@@ -183,12 +183,12 @@ All battery control flows through a single **Dispatch Mode** selector. Configure
 | Mode | Description |
 |------|-------------|
 | **Normal** | Battery operates automatically based on inverter configuration |
-| **Force Charge** | Charges from grid at the configured power until the target SOC is reached |
-| **Force Discharge** | Discharges at the configured power until the cutoff SOC is reached |
+| **Force Charge** | Charges from solar/grid at the configured power until the target SOC is reached |
+| **Force Discharge** | Discharges to load/grid at the configured power until the cutoff SOC is reached |
 | **Dynamic Export** | Continuously adjusts discharge to maintain grid export at the target level |
 | **Dynamic Import** | Continuously adjusts charging to maintain grid import at the target level |
-| **No Battery Charge** | Prevents all battery charging (from solar and grid) |
-| **Idle (No Dispatch)** | Halts all battery dispatch — inverter stays online but battery sits idle |
+| **No Battery Charge** | Prevents all battery charging (from solar and grid). Will still discharge to loads if needed |
+| **Idle (No Dispatch)** | Halts all battery dispatch (charging + discharging) — inverter stays online but battery sits idle |
 
 > **Note:** Selecting **Normal** or pressing the **Stop Force Charge/Discharge** button cancels any active dispatch mode.
 
@@ -206,7 +206,7 @@ Set these before activating Force Charge, Force Discharge, or Dynamic modes.
 
 #### How to Use Force Charge
 
-1. Set **Dispatch Power** to the desired charge rate (e.g. 3 kW).
+1. Set **Dispatch Power** to the desired charge rate (e.g. 4 kW).
 2. Set **Dispatch Duration** (e.g. 120 minutes).
 3. Set **Dispatch Charge Target SOC** to your desired ceiling (e.g. 100 %).
 4. Set **Dispatch Mode** → **Force Charge**.
@@ -217,7 +217,7 @@ The battery will charge at the specified rate until either the duration expires 
 
 Dynamic Export discharges the battery to keep grid export at a constant target level, accounting for varying house load. It re-evaluates every 10 seconds.
 
-1. Set **Dynamic Mode Power Target** to your desired export level in kW (e.g. 0.5 kW for a gentle trickle; a higher value if you want to hold steady export).
+1. Set **Dynamic Mode Power Target** to your desired export level in kW (e.g. 5kW to the grid).
 2. Set **Dispatch Mode** → **Dynamic Export**.
 
 The integration will automatically adjust discharge power every 10 seconds, with a 0.3 kW debounce to avoid excessive commands.
@@ -234,7 +234,7 @@ Dynamic Import charges the battery from the grid while holding a target import l
 | Entity | Description |
 |--------|-------------|
 | **PV Switch** (Select) | Control PV input: Auto / Open / Close |
-| **Time Period Control** (Select) | Enable or disable time-based charge/discharge schedules programmed on the inverter |
+| **Time Period Control** (Select) | Enable or disable time-based charge/discharge schedules programmed on the inverter | *Note - currently not working*
 | **Stop Force Charge/Discharge** (Button) | Immediately cancels all active dispatch (including dynamic modes) and returns to Normal |
 
 ---
