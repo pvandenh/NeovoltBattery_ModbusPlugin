@@ -234,7 +234,7 @@ Dynamic Import charges the battery from the grid while holding a target import l
 | Entity | Description |
 |--------|-------------|
 | **PV Switch** (Select) | Control PV input: Auto / Open / Close |
-| **Time Period Control** (Select) | Enable or disable time-based charge/discharge schedules programmed on the inverter | *Note - currently not working*
+| **Time Period Control** (Select) | *Note - disabled as not currently not working* |
 | **Stop Force Charge/Discharge** (Button) | Immediately cancels all active dispatch (including dynamic modes) and returns to Normal |
 
 ---
