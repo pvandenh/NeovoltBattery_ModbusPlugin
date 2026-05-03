@@ -210,75 +210,12 @@ async def async_setup_entry(
     device_name = hass.data[DOMAIN][entry.entry_id]["device_name"]
 
     selects = [
-        NeovoltTimePeriodControlSelect(coordinator, device_info, device_name, client, hass),
         NeovoltDispatchModeSelect(coordinator, device_info, device_name, client, hass),
         NeovoltPVSwitchSelect(coordinator, device_info, device_name, client, hass),
     ]
 
     async_add_entities(selects)
 
-
-class NeovoltTimePeriodControlSelect(CoordinatorEntity, SelectEntity):
-    """Time period control select."""
-
-    _attr_options = [
-        "Disable",
-        "Enable Charge Time Period Control",
-        "Enable Discharge Time Period Control",
-        "Enable Time Period Control",
-    ]
-
-    def __init__(self, coordinator, device_info, device_name, client, hass):
-        """Initialize the select entity."""
-        super().__init__(coordinator)
-        self._client = client
-        self._hass = hass
-        self._attr_name = f"Neovolt {device_name} Time Period Control"
-        self._attr_unique_id = f"neovolt_{device_name}_time_period_control"
-        self._attr_icon = "mdi:clock-time-four-outline"
-        self._attr_device_info = device_info
-
-    @property
-    def available(self) -> bool:
-        """Return True if coordinator has valid cached data."""
-        return self.coordinator.has_valid_data
-
-    @property
-    def current_option(self):
-        """Return the current option."""
-        value = self.coordinator.data.get("time_period_control_flag", 0)
-        # Bounds check: ensure value is valid index into options
-        if isinstance(value, int) and 0 <= value < len(self._attr_options):
-            return self._attr_options[value]
-        # Invalid value - log warning and return default
-        if value != 0:
-            _LOGGER.warning(f"Unexpected time_period_control_flag value: {value}, using default")
-        return self._attr_options[0]
-
-    async def async_select_option(self, option: str) -> None:
-        """Change the selected option."""
-        try:
-            # Validate option before attempting to use it
-            if option not in self._attr_options:
-                _LOGGER.error(
-                    f"Invalid option '{option}' for time period control. "
-                    f"Valid options: {self._attr_options}"
-                )
-                return
-
-            value = self._attr_options.index(option)
-            _LOGGER.info(f"Setting time period control to: {option} (value: {value})")
-            await self._hass.async_add_executor_job(
-                self._client.write_register, 0x084F, value
-            )
-            # Optimistic update - show expected value immediately
-            self.coordinator.set_optimistic_value("time_period_control_flag", value)
-            await self.coordinator.async_request_refresh()
-        except ValueError as e:
-            # This should not happen due to validation above, but handle defensively
-            _LOGGER.error(f"Option '{option}' not found in valid options: {e}")
-        except Exception as e:
-            _LOGGER.error(f"Failed to set time period control to '{option}': {e}")
 
 
 class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):

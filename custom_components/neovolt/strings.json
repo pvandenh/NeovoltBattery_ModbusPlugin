@@ -132,7 +132,7 @@
             "description": "Prevent all battery charging (from solar and grid)"
           },
           "no_battery_discharge": {
-            "description": "Halts all active battery dispatch. Both charging and discharging are suppressed — the battery sits idle. Useful when you want the inverter online but don't want it moving energy in either direction."
+            "description": "Halts all active battery dispatch. Both charging and discharging are suppressed \u2014 the battery sits idle. Useful when you want the inverter online but don't want it moving energy in either direction."
           }
         }
       }
@@ -141,6 +141,12 @@
       "dynamic_mode_power_target": {
         "name": "Dynamic Mode Power Target",
         "description": "Target power level for dynamic dispatch modes (in kW).\n\nDynamic Export: battery discharges to export this amount above house load.\nDynamic Import: battery charges so that this amount is drawn from the grid.\n\nUpdates every 10 seconds with a 0.3kW debounce threshold."
+      }
+    },
+    "button": {
+      "sync_system_clock": {
+        "name": "Sync System Clock",
+        "description": "Write the current Home Assistant local time to the inverter's internal clock registers. Useful after a power cut or DST change."
       }
     }
   }

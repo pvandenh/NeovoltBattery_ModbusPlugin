@@ -27,7 +27,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -63,7 +62,7 @@ async def async_setup_entry(
     max_discharge_power = entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
 
     numbers = [
-        # System Settings (write to Modbus)
+        # ── System Settings (write to Modbus) ──────────────────────────────
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
             "max_feed_to_grid", "Max Feed to Grid Power",
@@ -80,7 +79,7 @@ async def async_setup_entry(
             4, 100, 1, PERCENTAGE, 0x0850, True
         ),
 
-        # Consolidated Dispatch Controls (local storage, used by dispatch mode select)
+        # ── Consolidated Dispatch Controls (local storage) ─────────────────
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
             "dispatch_power", "Dispatch Power",
@@ -107,7 +106,7 @@ async def async_setup_entry(
             default_value=10, icon="mdi:battery-low"
         ),
 
-        # Dynamic Mode Power Target (local storage, used by both Dynamic Export and Dynamic Import)
+        # ── Dynamic Mode Power Target (local storage) ──────────────────────
         # Renamed from "Dynamic Export Target" to serve both export and import modes.
         # - In Dynamic Export mode: sets the target export power above house load (kW).
         # - In Dynamic Import mode: sets the target import power drawn from the grid (kW).
@@ -120,7 +119,7 @@ async def async_setup_entry(
             config_entry=entry, fixed_max=True
         ),
 
-        # PV Capacity (32-bit register, in Watts)
+        # ── PV Capacity (32-bit register, in Watts) ────────────────────────
         NeovoltNumber(
             coordinator, device_info, device_name, client, hass,
             "pv_capacity", "PV Capacity",
@@ -223,7 +222,9 @@ class NeovoltNumber(CoordinatorEntity, NumberEntity):
     def native_value(self):
         """Return the current value."""
         if self._write_to_modbus:
-            # Get value from Modbus (coordinator data)
+            # Get value from Modbus (coordinator data) — provides two-way sync for
+            # schedule registers: any external change is reflected automatically on
+            # the next coordinator poll, matching the AlphaESS "Update Slider" pattern.
             return self.coordinator.data.get(self._key)
         else:
             # Return local value for force charge/discharge settings

@@ -518,6 +518,8 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             return self._parse_inverter_registers(regs)
         elif block_name == "pv_inverter_energy":
             return self._parse_pv_inverter_energy_registers(regs)
+        elif block_name == "system_time":
+            return self._parse_system_time_registers(regs)
         elif block_name == "settings":
             return self._parse_settings_registers(regs)
         elif block_name == "dispatch":
@@ -679,15 +681,58 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             "system_has_fault": system_fault_raw != 0,
         }
 
-    def _parse_settings_registers(self, regs: List[int]) -> Dict[str, Any]:
-        """Parse settings register block (0x0800-0x0855)."""
+    def _parse_system_time_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse system time register block (0x0740-0x0742, count=3).
+
+        Each register packs two decimal fields into high and low bytes using
+        plain decimal values (not BCD): e.g. 0x1904 means year=25 (2025),
+        month=4 — the same encoding written by the Sync System Clock button.
+
+          0x0740  0xYYMM  high=year offset from 2000, low=month  (1-12)
+          0x0741  0xDDHH  high=day (1-31),              low=hour (0-23)
+          0x0742  0xmmss  high=minute (0-59),            low=second (0-59)
+
+        Stored as individual integer fields so the sensor can format them
+        and also expose them as attributes for fine-grained automation use.
+        """
+        yymm = regs[0]
+        ddhh = regs[1]
+        mmss = regs[2]
+
+        year  = ((yymm >> 8) & 0xFF) + 2000
+        month = yymm & 0xFF
+        day   = (ddhh >> 8) & 0xFF
+        hour  = ddhh & 0xFF
+        minute = (mmss >> 8) & 0xFF
+        second = mmss & 0xFF
+
         return {
+            "inverter_time_year":   year,
+            "inverter_time_month":  month,
+            "inverter_time_day":    day,
+            "inverter_time_hour":   hour,
+            "inverter_time_minute": minute,
+            "inverter_time_second": second,
+        }
+
+    def _parse_settings_registers(self, regs: List[int]) -> Dict[str, Any]:
+        """Parse settings register block (0x0800-0x0855, count=86).
+
+        Index map (address = 0x0800 + index):
+          0  (0x0800) — max_feed_to_grid
+          1  (0x0801) — pv_capacity high word
+          2  (0x0802) — pv_capacity low word
+         80  (0x0850) — discharging_cutoff_soc
+         85  (0x0855) — charging_cutoff_soc
+        """
+        result = {
             "max_feed_to_grid": regs[0],
             "pv_capacity": (regs[1] << 16) | regs[2],
-            "charging_cutoff_soc": regs[85],
             "discharging_cutoff_soc": regs[80],
-            "time_period_control_flag": regs[79],
+            "charging_cutoff_soc": regs[85],
         }
+
+        return result
 
     def _parse_dispatch_registers(self, regs: List[int]) -> Dict[str, Any]:
         """Parse dispatch register block (0x0880-0x088A, 11 registers).

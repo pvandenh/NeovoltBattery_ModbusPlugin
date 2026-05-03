@@ -111,16 +111,26 @@ class RegisterBlock:
 
 # Register blocks for adaptive polling
 # Each block is polled independently with its own adaptive interval
+#
 REGISTER_BLOCKS = {
     "grid": RegisterBlock("grid", 0x0010, 39),
     "pv": RegisterBlock("pv", 0x0090, 20),
     "battery": RegisterBlock("battery", 0x0100, 40),
     "inverter": RegisterBlock("inverter", 0x0500, 110),
     "pv_inverter_energy": RegisterBlock("pv_inverter_energy", 0x08D0, 6),  # Extended to include system_fault at 0x08D4
-    "settings": RegisterBlock("settings", 0x0800, 86),
+    "system_time": RegisterBlock("system_time", 0x0740, 3),  # 0x0740-0x0742: packed YY/MM, DD/HH, mm/ss
+    "settings": RegisterBlock("settings", 0x0800, 86),  # 0x0800-0x0855: covers up to charging_cutoff_soc
     "dispatch": RegisterBlock("dispatch", 0x0880, 11),  # Para1-Para8 (11 registers)
     "calibration": RegisterBlock("calibration", 0x11D3, 3),  # AlphaESS-shared: point1, coef1, offset1
 }
+
+# System clock registers (R/W, packed BCD hex format)
+# 0x0740: 0xYYMM  (year offset from 2000, month)
+# 0x0741: 0xDDHH  (day, hour)
+# 0x0742: 0xmmss  (minute, second)
+SYSTEM_TIME_YYMM_REGISTER = 0x0740
+SYSTEM_TIME_DDHH_REGISTER  = 0x0741
+SYSTEM_TIME_MMSS_REGISTER  = 0x0742
 
 # ─── Combined (host + follower) data keys ────────────────────────────────────
 # These keys are written into the host coordinator's data dict by

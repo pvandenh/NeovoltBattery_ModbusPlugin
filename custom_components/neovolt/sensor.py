@@ -408,6 +408,9 @@ async def async_setup_entry(
         ]
         sensors.extend(combined_sensors)
 
+    # System time sensor — available on all roles, polls the inverter clock registers
+    sensors.append(NeovoltSystemTimeSensor(coordinator, device_info, device_name))
+
     async_add_entities(sensors)
 
 
@@ -956,3 +959,95 @@ class NeovoltGridPowerOffsetSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         """Return the current grid power offset in watts."""
         return self.coordinator.data.get("grid_power_offset")
+
+
+class NeovoltSystemTimeSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing the inverter's internal system clock.
+
+    State is the inverter time formatted as an ISO-style string
+    (YYYY-MM-DD HH:MM:SS) so users can immediately see whether the clock
+    is correct and whether a Sync is needed.
+
+    The sensor also exposes the individual time components as extra state
+    attributes, and a ``drift_seconds`` attribute showing the difference
+    between the inverter clock and HA's current time — positive means the
+    inverter is ahead, negative means it is behind.
+    """
+
+    def __init__(self, coordinator, device_info, device_name: str) -> None:
+        """Initialize the system time sensor."""
+        super().__init__(coordinator)
+        self._attr_name = f"Neovolt {device_name} Inverter System Time"
+        self._attr_unique_id = f"neovolt_{device_name}_inverter_system_time"
+        self._attr_icon = "mdi:clock-outline"
+        self._attr_device_info = device_info
+        # Plain string state — no unit, no numeric device class
+        self._attr_native_unit_of_measurement = None
+        self._attr_device_class = None
+        self._attr_state_class = None
+
+    @property
+    def available(self) -> bool:
+        """Available once the coordinator has read the system time block."""
+        return (
+            self.coordinator.has_valid_data
+            and "inverter_time_year" in self.coordinator.data
+        )
+
+    def _get_time_parts(self) -> tuple[int, int, int, int, int, int] | None:
+        """Return (year, month, day, hour, minute, second) or None if not ready."""
+        data = self.coordinator.data
+        keys = (
+            "inverter_time_year",
+            "inverter_time_month",
+            "inverter_time_day",
+            "inverter_time_hour",
+            "inverter_time_minute",
+            "inverter_time_second",
+        )
+        values = [data.get(k) for k in keys]
+        if any(v is None for v in values):
+            return None
+        return tuple(int(v) for v in values)
+
+    @property
+    def native_value(self) -> str | None:
+        """Return inverter time as 'YYYY-MM-DD HH:MM:SS'."""
+        parts = self._get_time_parts()
+        if parts is None:
+            return None
+        year, month, day, hour, minute, second = parts
+        try:
+            return f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+        except (ValueError, TypeError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return individual time components and drift vs HA time."""
+        parts = self._get_time_parts()
+        if parts is None:
+            return {}
+
+        year, month, day, hour, minute, second = parts
+        attrs = {
+            "year":   year,
+            "month":  month,
+            "day":    day,
+            "hour":   hour,
+            "minute": minute,
+            "second": second,
+        }
+
+        # Calculate drift: positive = inverter ahead of HA, negative = behind
+        try:
+            from datetime import datetime as dt
+            inverter_dt = dt(year, month, day, hour, minute, second)
+            ha_now = dt_util.now().replace(tzinfo=None)
+            drift = int((inverter_dt - ha_now).total_seconds())
+            attrs["drift_seconds"] = drift
+            attrs["drift_minutes"] = round(drift / 60, 1)
+        except (ValueError, TypeError):
+            pass
+
+        return attrs

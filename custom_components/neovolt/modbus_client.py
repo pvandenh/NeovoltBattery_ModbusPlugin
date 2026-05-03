@@ -30,6 +30,7 @@ class NeovoltModbusClient:
         self.slave_id = slave_id
         self.client = None
         self._lock = threading.Lock()  # Protect connection state AND command timing
+        self._sequence_lock = threading.Lock()  # Serialise multi-register write sequences
         self._last_error = None
         self._consecutive_errors = 0
         self._is_closing = False
@@ -379,6 +380,66 @@ class NeovoltModbusClient:
         result = self._retry_operation(_write_operation, operation_name)
         return result if result is not None else False
     
+    def write_schedule_registers(self, register_value_pairs: list[tuple[int, int]], control_flag: int = 0) -> bool:
+        """Write schedule registers using 4 contiguous block writes (Modbus FC 0x10),
+        then write 0x084F (time period control flag) as a commit trigger.
+
+        The schedule registers fall into 4 contiguous groups:
+          0x0856-0x0859  charge hours     (period 1 start, stop, period 2 start, stop)
+          0x085E-0x0861  charge minutes
+          0x0851-0x0854  discharge hours  (period 1 start, stop, period 2 start, stop)
+          0x085A-0x085D  discharge minutes
+
+        After writing all 4 groups, 0x084F is written with the current
+        time_period_control_flag value. This acts as a commit/apply trigger —
+        the EMS uses this write to detect that schedule settings have changed
+        and should be applied. Without it the EMS ignores the register writes.
+
+        _sequence_lock is held across all writes to prevent any concurrent
+        read from interleaving.
+
+        Args:
+            register_value_pairs: 16 (address, value) tuples.
+            control_flag: Current value of 0x084F to re-write as commit trigger.
+        Returns:
+            True if all writes succeeded, False on any failure.
+        """
+        reg_map = {addr: val for addr, val in register_value_pairs}
+
+        groups = [
+            (0x0856, [reg_map[0x0856], reg_map[0x0857], reg_map[0x0858], reg_map[0x0859]]),
+            (0x085E, [reg_map[0x085E], reg_map[0x085F], reg_map[0x0860], reg_map[0x0861]]),
+            (0x0851, [reg_map[0x0851], reg_map[0x0852], reg_map[0x0853], reg_map[0x0854]]),
+            (0x085A, [reg_map[0x085A], reg_map[0x085B], reg_map[0x085C], reg_map[0x085D]]),
+        ]
+
+        with self._sequence_lock:
+            _LOGGER.debug(
+                f"write_schedule_registers: writing 4 blocks + 0x084F commit "
+                f"(flag={control_flag})"
+            )
+            for start_addr, values in groups:
+                success = self.write_registers(start_addr, values)
+                if not success:
+                    _LOGGER.error(
+                        f"write_schedule_registers: block write failed at "
+                        f"{hex(start_addr)}, aborting sequence"
+                    )
+                    return False
+
+            # Write control flag last as commit trigger
+            success = self.write_register(0x084F, control_flag)
+            if not success:
+                _LOGGER.error(
+                    f"write_schedule_registers: commit write to 0x084F failed"
+                )
+                return False
+
+            _LOGGER.debug(
+                f"write_schedule_registers: all 4 blocks + 0x084F commit written successfully"
+            )
+            return True
+
     def close(self):
         """Close the Modbus connection."""
         with self._lock:
