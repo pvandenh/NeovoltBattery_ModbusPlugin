@@ -98,5 +98,31 @@
         }
       }
     }
+  },
+  "entity": {
+    "select": {
+      "dispatch_mode": {
+        "name": "Dispatch Mode",
+        "state": {
+          "normal": "Normal (Automatic)",
+          "force_charge": "Force Charge",
+          "force_discharge": "Force Discharge",
+          "dynamic_export": "Dynamic Export",
+          "dynamic_import": "Dynamic Import",
+          "no_battery_charge": "No Battery Charge",
+          "no_battery_discharge": "Idle (No Dispatch)"
+        }
+      }
+    },
+    "number": {
+      "dynamic_mode_power_target": {
+        "name": "Dynamic Mode Power Target"
+      }
+    },
+    "button": {
+      "sync_system_clock": {
+        "name": "Sync System Clock"
+      }
+    }
   }
 }
