@@ -128,6 +128,10 @@ class DynamicExportManager:
         self._last_commanded_power_kw: float = 0.0       # Last power sent — used for slew limiting
         self._start_time: Optional[datetime] = None
         self._duration_minutes: Optional[int] = None
+        # Hardware timer written to Para6 on every command — set to the full
+        # user-configured duration on start() so the inverter cannot self-reset
+        # between HA update cycles even if several cycles are missed.
+        self._timeout_seconds: int = 600
 
         # Get max charge/discharge power from config entry
         entry = None
@@ -178,6 +182,9 @@ class DynamicExportManager:
         self._last_commanded_power_kw = 0.0
         self._start_time = dt_util.now()
         self._duration_minutes = duration_minutes
+        # Set hardware timer to full duration so the inverter cannot self-reset
+        # between HA update cycles even if several consecutive cycles are missed.
+        self._timeout_seconds = min(duration_minutes * 60, 65535)
 
         # Pin grid and battery blocks to fast poll rate for the duration of this mode
         self._coordinator.polling_manager.pin_block_interval("grid", DYNAMIC_MODE_FAST_POLL_INTERVAL)
@@ -414,9 +421,8 @@ class DynamicExportManager:
         safety_floor = self._coordinator.data.get("discharging_cutoff_soc", 10) if self._coordinator.data else 10
         soc_value = soc_percent_to_register(safety_floor)
 
-        # Build dispatch command for force discharge
-        timeout_seconds = 600  # 10 minutes
-
+        # Use the full user-configured duration as the hardware timer so the
+        # inverter cannot self-reset between HA update cycles.
         values = [
             1,                              # Para1: Dispatch start
             0,                              # Para2 high byte
@@ -426,7 +432,7 @@ class DynamicExportManager:
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
             soc_value,                      # Para5: SOC cutoff (0-255 range)
             0,                              # Para6 high byte
-            min(timeout_seconds, 65535),    # Para6 low: Time (seconds)
+            self._timeout_seconds,          # Para6 low: Time (seconds) — full duration
             255,                            # Para7: Energy routing (default)
             0,                              # Para8: PV switch (auto)
         ]
@@ -457,9 +463,8 @@ class DynamicExportManager:
         safety_ceiling = self._coordinator.data.get("charging_cutoff_soc", 100) if self._coordinator.data else 100
         soc_value = soc_percent_to_register(safety_ceiling)
 
-        # Build dispatch command for force charge
-        timeout_seconds = 600  # 10 minutes
-
+        # Use the full user-configured duration as the hardware timer so the
+        # inverter cannot self-reset between HA update cycles.
         values = [
             1,                              # Para1: Dispatch start
             0,                              # Para2 high byte
@@ -469,7 +474,7 @@ class DynamicExportManager:
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
             soc_value,                      # Para5: SOC target (0-255 range)
             0,                              # Para6 high byte
-            min(timeout_seconds, 65535),    # Para6 low: Time (seconds)
+            self._timeout_seconds,          # Para6 low: Time (seconds) — full duration
             255,                            # Para7: Energy routing (default)
             0,                              # Para8: PV switch (auto)
         ]
@@ -506,7 +511,7 @@ class DynamicExportManager:
                 DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2
                 soc_value,                      # Para5: SOC cutoff (preserve floor)
                 0,                              # Para6 high byte
-                600,                            # Para6 low: 10 minute timeout
+                self._timeout_seconds,          # Para6 low: Time (seconds) — full duration
                 255,                            # Para7: Energy routing (default)
                 0,                              # Para8: PV switch (auto)
             ]
@@ -585,6 +590,10 @@ class DynamicImportManager:
         self._last_commanded_power_kw: float = 0.0       # Last power sent — used for slew limiting
         self._start_time: Optional[datetime] = None
         self._duration_minutes: Optional[int] = None
+        # Hardware timer written to Para6 on every command — set to the full
+        # user-configured duration on start() so the inverter cannot self-reset
+        # between HA update cycles even if several cycles are missed.
+        self._timeout_seconds: int = 600
 
         # Get max charge/discharge power from config entry
         entry = None
@@ -634,6 +643,9 @@ class DynamicImportManager:
         self._last_commanded_power_kw = 0.0
         self._start_time = dt_util.now()
         self._duration_minutes = duration_minutes
+        # Set hardware timer to full duration so the inverter cannot self-reset
+        # between HA update cycles even if several consecutive cycles are missed.
+        self._timeout_seconds = min(duration_minutes * 60, 65535)
 
         # Pin grid and battery blocks to fast poll rate for the duration of this mode
         self._coordinator.polling_manager.pin_block_interval("grid", DYNAMIC_MODE_FAST_POLL_INTERVAL)
@@ -869,8 +881,9 @@ class DynamicImportManager:
         power_watts = int(power_kw * 1000)
         safety_ceiling = self._coordinator.data.get("charging_cutoff_soc", 100) if self._coordinator.data else 100
         soc_value = soc_percent_to_register(safety_ceiling)
-        timeout_seconds = 600  # 10 minutes
 
+        # Use the full user-configured duration as the hardware timer so the
+        # inverter cannot self-reset between HA update cycles.
         values = [
             1,                              # Para1: Dispatch start
             0,                              # Para2 high byte
@@ -880,7 +893,7 @@ class DynamicImportManager:
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
             soc_value,                      # Para5: SOC target (0-255 range)
             0,                              # Para6 high byte
-            min(timeout_seconds, 65535),    # Para6 low: Time (seconds)
+            self._timeout_seconds,          # Para6 low: Time (seconds) — full duration
             255,                            # Para7: Energy routing (default)
             0,                              # Para8: PV switch (auto)
         ]
@@ -905,8 +918,9 @@ class DynamicImportManager:
         power_watts = int(power_kw * 1000)
         safety_floor = self._coordinator.data.get("discharging_cutoff_soc", 10) if self._coordinator.data else 10
         soc_value = soc_percent_to_register(safety_floor)
-        timeout_seconds = 600
 
+        # Use the full user-configured duration as the hardware timer so the
+        # inverter cannot self-reset between HA update cycles.
         values = [
             1,                              # Para1: Dispatch start
             0,                              # Para2 high byte
@@ -916,7 +930,7 @@ class DynamicImportManager:
             DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2 (SOC control)
             soc_value,                      # Para5: SOC cutoff (0-255 range)
             0,                              # Para6 high byte
-            min(timeout_seconds, 65535),    # Para6 low: Time (seconds)
+            self._timeout_seconds,          # Para6 low: Time (seconds) — full duration
             255,                            # Para7: Energy routing (default)
             0,                              # Para8: PV switch (auto)
         ]
@@ -949,7 +963,7 @@ class DynamicImportManager:
                 DISPATCH_MODE_POWER_WITH_SOC,   # Para4: Mode 2
                 soc_value,                      # Para5: SOC target (preserve ceiling)
                 0,                              # Para6 high byte
-                600,                            # Para6 low: 10 minute timeout
+                self._timeout_seconds,          # Para6 low: Time (seconds) — full duration
                 255,                            # Para7: Energy routing (default)
                 0,                              # Para8: PV switch (auto)
             ]

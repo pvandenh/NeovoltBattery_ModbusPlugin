@@ -1435,11 +1435,18 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
         # If the inverter cleared dispatch_start on its own (duration expired,
         # external reset), disarm and return — no reset command needed.
+        # Exception: if a dynamic manager is still running it will refresh
+        # the hardware timer on its next cycle, so don't disarm yet.
         if self._last_known_data.get("dispatch_start", 1) == 0:
-            _LOGGER.debug(
-                "DispatchSocWatcher: dispatch_start cleared by inverter — disarming"
+            dynamic_running = (
+                (hasattr(self, "dynamic_export_manager") and self.dynamic_export_manager.is_running)
+                or (hasattr(self, "dynamic_import_manager") and self.dynamic_import_manager.is_running)
             )
-            self._soc_watcher.disarm()
+            if not dynamic_running:
+                _LOGGER.debug(
+                    "DispatchSocWatcher: dispatch_start cleared by inverter — disarming"
+                )
+                self._soc_watcher.disarm()
             return
 
         host_soc = self._last_known_data.get("battery_soc")
