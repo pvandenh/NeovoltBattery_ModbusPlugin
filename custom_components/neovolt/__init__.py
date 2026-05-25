@@ -222,21 +222,24 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
         STORAGE_DISPATCH_DISCHARGE_SOC,
     }
 
-    # Get current options
+    # Find any keys that are NOT runtime keys (i.e., actual user-facing config keys).
+    # If only runtime keys are present (or options is empty/None), skip the reload.
+    #
+    # BUG FIX: the previous `if options:` guard was False for an empty dict {},
+    # causing the code to fall through to async_reload on every 5-minute
+    # persistent-data save when entry.options had never been populated by the
+    # options flow. This silently reloaded the integration ~5 minutes after any
+    # dispatch mode was set, reverting Force Charge / Idle back to Normal.
     options = entry.options or {}
+    config_keys = set(options.keys()) - RUNTIME_KEYS
 
-    # If we have options, check if only runtime keys were updated
-    if options:
-        # Get all keys that are NOT runtime keys (i.e., actual config keys)
-        config_keys = set(options.keys()) - RUNTIME_KEYS
+    if not config_keys:
+        _LOGGER.debug(
+            "Persistent data updated (runtime keys only or empty options), "
+            "skipping integration reload"
+        )
+        return
 
-        # If no config keys exist (only runtime keys), skip reload
-        if not config_keys:
-            _LOGGER.debug(
-                "Persistent data updated (runtime keys only), skipping integration reload"
-            )
-            return
-
-    # Configuration keys were changed - reload integration
+    # Actual configuration keys were changed - reload integration
     _LOGGER.info("Configuration changed, reloading Neovolt integration")
     await hass.config_entries.async_reload(entry.entry_id)

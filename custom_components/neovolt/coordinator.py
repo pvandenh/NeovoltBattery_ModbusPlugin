@@ -252,6 +252,10 @@ class DispatchSocWatcher:
       to be missed.
     * **2-reading confirmation** — the threshold must be met on two consecutive
       poll cycles before the stop is issued, guarding against transient readings.
+    * **Asymmetric thresholds** — charge direction fires at exactly >= target
+      (no early tolerance) so a 100% target reaches a genuine full top-balance.
+      Discharge direction fires at <= cutoff + 0.9% as a small early buffer
+      is safe and avoids cutting off at the very last Watt.
     * **Persistent targets** — charge/discharge SOC targets survive HA reboots
       via entry.options, so the watcher re-arms correctly after a restart.
     * **Auto re-arm** — on startup the coordinator checks the live Modbus
@@ -313,8 +317,11 @@ class DispatchSocWatcher:
         """Evaluate current SOC against target. Returns True when stop should fire.
 
         Uses the most conservative SOC value in each direction:
-        - Discharge: min(host, combined) — fires as soon as either bank is at floor
-        - Charge:    max(host, combined) — fires as soon as either bank is at ceiling
+        - Discharge: min(host, combined) — fires when soc <= cutoff + 0.9% (small early buffer)
+        - Charge:    max(host, combined) — fires when soc > target strictly (must exceed target, not just meet it,
+                     so e.g. a 100% target waits for the BMS to report above 100%
+                     — which never happens — meaning the inverter runs until its
+                     own firmware ceiling, giving a genuine top-balance)
         """
         if not self.is_armed:
             return False
@@ -335,7 +342,7 @@ class DispatchSocWatcher:
                 soc = max(host_soc, combined_soc)
             else:
                 soc = host_soc if host_soc is not None else combined_soc
-            threshold_met = soc >= (charge_target - 0.9)
+            threshold_met = soc > charge_target
 
         else:
             return False

@@ -73,8 +73,10 @@ DISPATCH_DURATION_DEFAULT = 90
 
 # Dispatch reset command (11 registers: Para1-Para8)
 # Format: [Para1, Para2_hi, Para2_lo, Para3_hi, Para3_lo, Para4, Para5, Para6_hi, Para6_lo, Para7, Para8]
-# This command resets to idle state with 90s timeout
-DISPATCH_RESET_VALUES = [0, 0, MODBUS_OFFSET, 0, MODBUS_OFFSET, 0, 0, 0, DISPATCH_DURATION_DEFAULT, 255, 0]
+# This command resets to idle state with 90s timeout.
+# NOTE: Para3 is reactive power and must be 0. The previous value of MODBUS_OFFSET (32000)
+# here was a bug that sent 32 kvar of reactive power to the inverter on every reset.
+DISPATCH_RESET_VALUES = [0, 0, MODBUS_OFFSET, 0, 0, 0, 0, 0, DISPATCH_DURATION_DEFAULT, 255, 0]
 
 # Polling configuration
 CONF_MIN_POLL_INTERVAL = "min_poll_interval"
