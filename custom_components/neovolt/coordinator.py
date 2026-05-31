@@ -959,6 +959,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         from .const import (
             DISPATCH_MODE_DYNAMIC_EXPORT,
             DISPATCH_MODE_DYNAMIC_IMPORT,
+            DISPATCH_MODE_DYNAMIC_SOC_EXPORT,
             DISPATCH_MODE_NO_DISCHARGE,
         )
 
@@ -977,6 +978,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         dynamic_import_running = (
             hasattr(self, "dynamic_import_manager")
             and self.dynamic_import_manager.is_running
+        )
+        dynamic_soc_export_running = (
+            hasattr(self, "dynamic_soc_export_manager")
+            and self.dynamic_soc_export_manager.is_running
         )
 
         # Check if No Battery Discharge is currently the cached mode.
@@ -1003,6 +1008,8 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
         if dynamic_import_running:
             effective_mode = DISPATCH_MODE_DYNAMIC_IMPORT
+        elif dynamic_soc_export_running:
+            effective_mode = DISPATCH_MODE_DYNAMIC_SOC_EXPORT
         elif dynamic_export_running:
             effective_mode = DISPATCH_MODE_DYNAMIC_EXPORT
         elif no_discharge_active:

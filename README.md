@@ -18,7 +18,7 @@ This integration connects your Neovolt inverter to Home Assistant, giving you:
 
 - **Real-time monitoring** of solar production, battery status, and grid usage
 - **Full battery control** via a single Dispatch Mode selector
-- **Dynamic Export and Dynamic Import modes** for automatic grid power management
+- **Dynamic Export, Dynamic Import, and Dynamic SOC Export modes** for automatic grid power management
 - **Energy tracking** for the Home Assistant Energy Dashboard
 - **Multi-inverter support** with combined sensors for parallel setups
 - **Automations** to optimise when your battery charges and discharges
@@ -187,6 +187,7 @@ All battery control flows through a single **Dispatch Mode** selector. Configure
 | **Force Discharge** | Discharges to load/grid at the configured power until the cutoff SOC is reached |
 | **Dynamic Export** | Continuously adjusts discharge to maintain grid export at the target level |
 | **Dynamic Import** | Continuously adjusts charging to maintain grid import at the target level |
+| **Dynamic SOC Export** | Paces a smooth discharge over the dispatch duration to land on a target end-of-window SOC; battery export tracks house load with a configurable buffer to prevent grid import |
 | **No Battery Charge** | Prevents all battery charging (from solar and grid). Will still discharge to loads if needed |
 | **Idle (No Dispatch)** | Halts all battery dispatch (charging + discharging) — inverter stays online but battery sits idle |
 
@@ -201,8 +202,10 @@ Set these before activating Force Charge, Force Discharge, or Dynamic modes.
 | **Dispatch Power** | 0.5 – max kW | Charge or discharge power (slider max reflects your configured system capacity) |
 | **Dispatch Duration** | 1 – 480 min | How long to run the dispatch command |
 | **Dispatch Charge Target SOC** | 10 – 100 % | Stop Force Charge when battery reaches this SOC |
-| **Dispatch Discharge Cutoff SOC** | 4 – 100 % | Stop Force Discharge when battery falls to this SOC |
+| **Dispatch Discharge Cutoff SOC** | 4 – 100 % | Stop Force Discharge when battery falls to this SOC. Also acts as a hard floor in Dynamic SOC Export |
 | **Dynamic Mode Power Target** | 0.05 – 15 kW | Target export power (Dynamic Export) or target import power (Dynamic Import) |
+| **Dispatch Discharge Target SOC** | 4 – 100 % | Dynamic SOC Export only — desired battery SOC at the end of the dispatch window |
+| **Dispatch Discharge Export Buffer** | 0 – max kW | Dynamic SOC Export only — safety margin held above house load so battery export never falls into grid import (default 0.2 kW) |
 
 #### How to Use Force Charge
 
@@ -228,6 +231,112 @@ Dynamic Import charges the battery from the grid while holding a target import l
 
 1. Set **Dynamic Mode Power Target** to the grid import power you want to maintain (e.g. 2 kW).
 2. Set **Dispatch Mode** → **Dynamic Import**.
+
+#### How to Use Dynamic SOC Export
+
+Dynamic SOC Export discharges the battery smoothly across the dispatch window so the SOC lands on your chosen target by the end of the window. Unlike Dynamic Export — where **you** pick the export power — here the discharge rate is **computed** from the remaining SOC delta and remaining time, then adjusted as house load changes so excess discharge during a spike is amortised across the rest of the window. That means the battery always covers at least the house load plus your safety buffer (so the grid stays in export, never import).
+
+Use it when you want to drain the battery to a known SOC by a known time (e.g. empty the battery to 30 % over the next 4 hours of an export tariff window) without manually tuning the discharge power as your starting SOC and load varies.
+
+
+1. Set **Dispatch Duration** to the length of the window (e.g. 240 minutes).
+2. Set **Dispatch Discharge Target SOC** to the SOC you want the battery to land on at the end of the window (e.g. 30 %).
+3. Set **Dispatch Discharge Cutoff SOC** to a hard floor — discharge stops here regardless of pacing (e.g. 20 %).
+4. Set **Dispatch Discharge Export Buffer** to the safety margin above house load you want to maintain (default 0.2 kW). Raise this if your load fluctuates rapidly and you see brief grid import.
+5. Set **Dispatch Mode** → **Dynamic SOC Export**.
+
+Notes:
+- If current SOC is already at or below the target, the loop will still hold the export buffer above house load (i.e. it will still avoid grid import).
+- Like Dynamic Export mode, Dispatch Discharge Cutoff SOC still acts as an absolute floor, and the force discharge mode will termination if the battery SOC reaches this level.
+- The control loop re-evaluates every 5 seconds and applies the same debounce and slew limits as Dynamic Export.
+- The mode ends automatically when the dispatch duration expires or the discharge cutoff SOC is reached.
+
+Below is suggested automation to set **Dispatch Duration**.  It allows for HA being restarted during the force discharge time window, and sets **Dispatch Duration** to the remaining time.
+
+Variables at the bottom set the "Force Charge" and "Dynamic SOC Export" time windows as well as other parameters. This example assumes your device is named "home" and entity ids are like "number.neovolt_home_dispatch_power".
+
+```
+alias: Neovolt Time of Day Dispatch
+triggers:
+  - minutes: /5
+    trigger: time_pattern
+  - event: start
+    trigger: homeassistant
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ today_at(force_charge_start) <= now() <
+              today_at(force_charge_end) }}
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.neovolt_home_dispatch_power
+            data:
+              value: "{{ force_charge_power_kw }}"
+          - action: number.set_value
+            target:
+              entity_id: number.neovolt_home_dispatch_charge_target_soc
+            data:
+              value: "{{ force_charge_target_soc }}"
+          - action: number.set_value
+            target:
+              entity_id: number.neovolt_home_dispatch_duration
+            data:
+              value: >
+                {% set mins = ((today_at(force_charge_end) -
+                now()).total_seconds() / 60) | int %} {{ [mins, 1] | max }}
+          - action: select.select_option
+            target:
+              entity_id: select.neovolt_home_dispatch_mode
+            data:
+              option: Force Charge
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ today_at(dynamic_export_start) <= now() <
+              today_at(dynamic_export_end) }}
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.neovolt_home_dispatch_discharge_export_buffer
+            data:
+              value: "{{ dynamic_export_buffer_kw }}"
+          - action: number.set_value
+            target:
+              entity_id: number.neovolt_home_dispatch_discharge_target_soc
+            data:
+              value: "{{ dynamic_export_target_soc }}"
+          - action: number.set_value
+            target:
+              entity_id: number.neovolt_home_dispatch_duration
+            data:
+              value: >
+                {% set mins = ((today_at(dynamic_export_end) -
+                now()).total_seconds() / 60) | int %} {{ [mins, 1] | max }}
+          - action: select.select_option
+            target:
+              entity_id: select.neovolt_home_dispatch_mode
+            data:
+              option: Dynamic SOC Export
+    default:
+      - action: select.select_option
+        target:
+          entity_id: select.neovolt_home_dispatch_mode
+        data:
+          option: Normal
+mode: single
+variables:
+  force_charge_start: "11:00:00"
+  force_charge_end: "14:00:00"
+  force_charge_power_kw: 5
+  force_charge_target_soc: 80
+  dynamic_export_start: "18:00:00"
+  dynamic_export_end: "21:00:00"
+  dynamic_export_buffer_kw: 0.2
+  dynamic_export_target_soc: 47
+```
 
 #### Additional Controls
 

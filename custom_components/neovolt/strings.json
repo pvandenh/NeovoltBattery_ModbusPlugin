@@ -109,6 +109,7 @@
           "force_discharge": "Force Discharge",
           "dynamic_export": "Dynamic Export",
           "dynamic_import": "Dynamic Import",
+          "dynamic_soc_export": "Dynamic SOC Export",
           "no_battery_charge": "No Battery Charge",
           "no_battery_discharge": "Idle (No Dispatch)"
         },
@@ -128,6 +129,9 @@
           "dynamic_import": {
             "description": "Automatically charge from the grid to maintain the target import power level. Continuously adjusts every 10 seconds with 0.3kW debounce threshold."
           },
+          "dynamic_soc_export": {
+            "description": "Smooth-paced discharge towards a target SOC at the end of the discharge window. If house load exceeds the smooth rate, discharge ramps up to cover load + safety buffer so the system never imports; when load drops, the smooth rate is recomputed from the remaining SOC and time so the SOC target still lands at window close."
+          },
           "no_battery_charge": {
             "description": "Prevent all battery charging (from solar and grid)"
           },
@@ -141,6 +145,14 @@
       "dynamic_mode_power_target": {
         "name": "Dynamic Mode Power Target",
         "description": "Target power level for dynamic dispatch modes (in kW).\n\nDynamic Export: battery discharges to export this amount above house load.\nDynamic Import: battery charges so that this amount is drawn from the grid.\n\nUpdates every 10 seconds with a 0.3kW debounce threshold."
+      },
+      "dispatch_discharge_target_soc": {
+        "name": "Dispatch Discharge Target SOC",
+        "description": "End-of-window SOC target (%) for Dynamic SOC Export mode. The smooth discharge rate is calculated from (current SOC − target SOC) × battery capacity ÷ remaining window time."
+      },
+      "dispatch_discharge_export_buffer": {
+        "name": "Dispatch Discharge Export Buffer",
+        "description": "Safety export buffer (W) for Dynamic SOC Export mode. The battery always discharges enough to keep the grid exporting at least this amount, preventing any grid import even when house load spikes above the smooth discharge rate."
       }
     },
     "button": {

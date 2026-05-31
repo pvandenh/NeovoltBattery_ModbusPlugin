@@ -87,6 +87,14 @@ class NeovoltStopForceChargeDischargeButton(CoordinatorEntity, ButtonEntity):
                 except Exception as e:
                     _LOGGER.debug(f"Dynamic Import manager not running or already stopped: {e}")
 
+            # Stop dynamic SOC export manager if running
+            if hasattr(self.coordinator, 'dynamic_soc_export_manager'):
+                try:
+                    await self.coordinator.dynamic_soc_export_manager.stop()
+                    _LOGGER.info("Stopped Dynamic SOC Export manager")
+                except Exception as e:
+                    _LOGGER.debug(f"Dynamic SOC Export manager not running or already stopped: {e}")
+
             await self._hass.async_add_executor_job(
                 self._client.write_registers, 0x0880, DISPATCH_RESET_VALUES
             )
