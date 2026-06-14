@@ -607,6 +607,19 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             manager = getattr(self.coordinator, attr, None)
             if manager is not None:
                 await manager.stop()
+        # Clear any prior watcher intent — will be re-armed at end of this method
+        self.coordinator.soc_watcher_disarm()
+
+        # Persist the current discharge cutoff so the watcher uses the correct
+        # value here and after a HA restart (the startup rearm logic reads
+        # self._dispatch_discharge_soc, not the entity).
+        _soc_cutoff, _, _ = safe_get_by_unique_id(
+            self._hass,
+            f"neovolt_{self._device_name}_dispatch_discharge_soc",
+            10.0,
+        )
+        self.coordinator._dispatch_discharge_soc = float(int(_soc_cutoff))
+        self.coordinator._save_persistent_data()
 
         if not hasattr(self.coordinator, "dynamic_soc_export_manager"):
             from .dynamic_export import DynamicSOCExportManager
@@ -624,6 +637,9 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
 
         self.coordinator.set_optimistic_value("dispatch_start", 1)
         self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_SOC_EXPORT)
+        # Arm the SOC watcher for discharge direction — enforces the hard cutoff
+        # floor regardless of whether the manager itself is still running.
+        self.coordinator.soc_watcher_arm("discharge")
         await self.coordinator.async_request_refresh()
 
     async def _start_no_battery_charge(self):

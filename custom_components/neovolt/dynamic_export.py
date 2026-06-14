@@ -421,11 +421,9 @@ class DynamicExportManager:
 
         Base implementation reads the static "Dynamic Mode Power Target" entity.
         Subclasses override to compute a dynamic setpoint.
-        """    
-        # Get target export from number entity (unique_id lookup — robust to device naming)
-        return  safe_get_by_unique_id(
+        """
+        return _safe_get_by_unique_id(
             self._hass,
-            f"number.neovolt_{self._device_name}_dynamic_mode_power_target",
             f"neovolt_{self._device_name}_dynamic_mode_power_target",
             1.0,
         )

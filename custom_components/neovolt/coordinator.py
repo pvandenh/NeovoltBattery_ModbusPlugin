@@ -1448,6 +1448,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
             dynamic_running = (
                 (hasattr(self, "dynamic_export_manager") and self.dynamic_export_manager.is_running)
                 or (hasattr(self, "dynamic_import_manager") and self.dynamic_import_manager.is_running)
+                or (hasattr(self, "dynamic_soc_export_manager") and self.dynamic_soc_export_manager.is_running)
             )
             if not dynamic_running:
                 _LOGGER.debug(
