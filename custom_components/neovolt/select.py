@@ -15,6 +15,7 @@ from .const import (
     DISPATCH_MODE_POWER_WITH_SOC,
     DISPATCH_MODE_DYNAMIC_EXPORT,
     DISPATCH_MODE_DYNAMIC_IMPORT,
+    DISPATCH_MODE_DYNAMIC_SOC_EXPORT,
     DISPATCH_MODE_NO_CHARGE,
     DISPATCH_MODE_NO_DISCHARGE,
     DISPATCH_RESET_VALUES,
@@ -227,6 +228,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         "Force Discharge",
         "Dynamic Export",
         "Dynamic Import",
+        "Dynamic SOC Export",
         "No Battery Charge",
         "Idle (No Dispatch)",
     ]
@@ -268,6 +270,9 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         if dispatch_mode == DISPATCH_MODE_DYNAMIC_IMPORT:
             return "Dynamic Import"
 
+        if dispatch_mode == DISPATCH_MODE_DYNAMIC_SOC_EXPORT:
+            return "Dynamic SOC Export"
+
         if dispatch_mode == DISPATCH_MODE_NO_DISCHARGE:
             return "Idle (No Dispatch)"
 
@@ -298,6 +303,8 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
                 await self._start_dynamic_export()
             elif option == "Dynamic Import":
                 await self._start_dynamic_import()
+            elif option == "Dynamic SOC Export":
+                await self._start_dynamic_soc_export()
             elif option == "No Battery Charge":
                 await self._start_no_battery_charge()
             elif option == "Idle (No Dispatch)":
@@ -308,13 +315,20 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         except Exception as e:
             _LOGGER.error(f"Failed to set dispatch mode to '{option}': {e}", exc_info=True)
 
+    async def _stop_all_dynamic_managers(self):
+        """Stop every dynamic dispatch manager that is currently attached."""
+        for attr in (
+            "dynamic_export_manager",
+            "dynamic_import_manager",
+            "dynamic_soc_export_manager",
+        ):
+            manager = getattr(self.coordinator, attr, None)
+            if manager is not None:
+                await manager.stop()
+
     async def _stop_dispatch(self):
         """Stop all active dispatch modes (Normal mode)."""
-        # Stop dynamic export/import if running
-        if hasattr(self.coordinator, 'dynamic_export_manager'):
-            await self.coordinator.dynamic_export_manager.stop()
-        if hasattr(self.coordinator, 'dynamic_import_manager'):
-            await self.coordinator.dynamic_import_manager.stop()
+        await self._stop_all_dynamic_managers()
 
         _LOGGER.info("Stopping dispatch, returning to Normal mode")
         await self._hass.async_add_executor_job(
@@ -329,10 +343,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
     async def _start_force_charge(self):
         """Start force charging with parameters from number entities."""
         # Stop dynamic export/import if running
-        if hasattr(self.coordinator, 'dynamic_export_manager'):
-            await self.coordinator.dynamic_export_manager.stop()
-        if hasattr(self.coordinator, 'dynamic_import_manager'):
-            await self.coordinator.dynamic_import_manager.stop()
+        await self._stop_all_dynamic_managers()
         # Clear any prior intent (will be re-set at end of this method)
         self.coordinator.soc_watcher_disarm()
 
@@ -341,6 +352,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             f"neovolt_{self._device_name}_dispatch_power",
             3.0
         )
+
         _duration, duration_default, duration_reason = safe_get_by_unique_id(
             self._hass,
             f"neovolt_{self._device_name}_dispatch_duration",
@@ -422,10 +434,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
     async def _start_force_discharge(self):
         """Start force discharging with parameters from number entities."""
         # Stop dynamic export/import if running
-        if hasattr(self.coordinator, 'dynamic_export_manager'):
-            await self.coordinator.dynamic_export_manager.stop()
-        if hasattr(self.coordinator, 'dynamic_import_manager'):
-            await self.coordinator.dynamic_import_manager.stop()
+        await self._stop_all_dynamic_managers()
         # Clear any prior intent (will be re-set at end of this method)
         self.coordinator.soc_watcher_disarm()
 
@@ -516,9 +525,11 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         """Start Dynamic Export mode - discharge at load + target kW."""
         _LOGGER.info("Starting Dynamic Export mode")
 
-        # Stop dynamic import if running
-        if hasattr(self.coordinator, 'dynamic_import_manager'):
-            await self.coordinator.dynamic_import_manager.stop()
+        # Stop any other dynamic manager that may be running
+        for attr in ("dynamic_import_manager", "dynamic_soc_export_manager"):
+            manager = getattr(self.coordinator, attr, None)
+            if manager is not None:
+                await manager.stop()
         # Clear any force charge/discharge intent — dynamic modes manage their own SOC guards
         self.coordinator.soc_watcher_disarm()
 
@@ -549,9 +560,11 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         """Start Dynamic Import mode - charge battery to maintain target grid import level."""
         _LOGGER.info("Starting Dynamic Import mode")
 
-        # Stop dynamic export if running
-        if hasattr(self.coordinator, 'dynamic_export_manager'):
-            await self.coordinator.dynamic_export_manager.stop()
+        # Stop any other dynamic manager that may be running
+        for attr in ("dynamic_export_manager", "dynamic_soc_export_manager"):
+            manager = getattr(self.coordinator, attr, None)
+            if manager is not None:
+                await manager.stop()
         # Clear any force charge/discharge intent — dynamic modes manage their own SOC guards
         self.coordinator.soc_watcher_disarm()
 
@@ -578,13 +591,60 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         self.coordinator.soc_watcher_arm("charge")
         await self.coordinator.async_request_refresh()
 
+    async def _start_dynamic_soc_export(self):
+        """Start Dynamic SOC Export mode — smooth discharge to a target end-of-window SOC.
+
+        Reads:
+          * Dispatch Duration              — window length (minutes)
+          * Dispatch Discharge Target SOC            — desired SOC at window end (%)
+          * Dispatch Discharge Cutoff SOC  — hard floor, never discharge below
+          * Dispatch Discharge Export Buffer         — safety margin to ensure no grid import (W)
+        """
+        _LOGGER.info("Starting Dynamic SOC Export mode")
+
+        # Stop any other dynamic manager that may be running
+        for attr in ("dynamic_export_manager", "dynamic_import_manager"):
+            manager = getattr(self.coordinator, attr, None)
+            if manager is not None:
+                await manager.stop()
+        # Clear any prior watcher intent — will be re-armed at end of this method
+        self.coordinator.soc_watcher_disarm()
+
+        # Persist the current discharge cutoff so the watcher uses the correct
+        # value here and after a HA restart (the startup rearm logic reads
+        # self._dispatch_discharge_soc, not the entity).
+        _soc_cutoff, _, _ = safe_get_by_unique_id(
+            self._hass,
+            f"neovolt_{self._device_name}_dispatch_discharge_soc",
+            10.0,
+        )
+        self.coordinator._dispatch_discharge_soc = float(int(_soc_cutoff))
+        self.coordinator._save_persistent_data()
+
+        if not hasattr(self.coordinator, "dynamic_soc_export_manager"):
+            from .dynamic_export import DynamicSOCExportManager
+            self.coordinator.dynamic_soc_export_manager = DynamicSOCExportManager(
+                self._hass, self.coordinator, self._client, self._device_name
+            )
+            _LOGGER.debug("Created new Dynamic SOC Export manager instance")
+
+        try:
+            await self.coordinator.dynamic_soc_export_manager.start()
+            _LOGGER.info("Dynamic SOC Export manager started successfully")
+        except Exception as e:
+            _LOGGER.error(f"Failed to start Dynamic SOC Export manager: {e}", exc_info=True)
+            return
+
+        self.coordinator.set_optimistic_value("dispatch_start", 1)
+        self.coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_SOC_EXPORT)
+        # Arm the SOC watcher for discharge direction — enforces the hard cutoff
+        # floor regardless of whether the manager itself is still running.
+        self.coordinator.soc_watcher_arm("discharge")
+        await self.coordinator.async_request_refresh()
+
     async def _start_no_battery_charge(self):
         """Mode 19: Prevent all battery charging (solar & grid)."""
-        # Stop dynamic export/import if running
-        if hasattr(self.coordinator, 'dynamic_export_manager'):
-            await self.coordinator.dynamic_export_manager.stop()
-        if hasattr(self.coordinator, 'dynamic_import_manager'):
-            await self.coordinator.dynamic_import_manager.stop()
+        await self._stop_all_dynamic_managers()
         self.coordinator.soc_watcher_disarm()
 
         _duration, duration_default, duration_reason = safe_get_by_unique_id(
@@ -640,11 +700,7 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
         NOTE: Hardware Mode 20 was tested and found to trigger full-rate Force Charge
         on this firmware. It is intentionally NOT used here.
         """
-        # Stop dynamic export/import if running
-        if hasattr(self.coordinator, 'dynamic_export_manager'):
-            await self.coordinator.dynamic_export_manager.stop()
-        if hasattr(self.coordinator, 'dynamic_import_manager'):
-            await self.coordinator.dynamic_import_manager.stop()
+        await self._stop_all_dynamic_managers()
         self.coordinator.soc_watcher_disarm()
 
         _duration, duration_default, duration_reason = safe_get_by_unique_id(

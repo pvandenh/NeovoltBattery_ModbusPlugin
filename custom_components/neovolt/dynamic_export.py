@@ -24,18 +24,23 @@ from .const import (
     DEFAULT_MAX_CHARGE_POWER,
     DISPATCH_MODE_DYNAMIC_EXPORT,
     DISPATCH_MODE_DYNAMIC_IMPORT,
+    DISPATCH_MODE_DYNAMIC_SOC_EXPORT,
     DISPATCH_MODE_POWER_WITH_SOC,
     DYNAMIC_EXPORT_MIN_POWER,
     DYNAMIC_EXPORT_UPDATE_INTERVAL,
     DYNAMIC_EXPORT_SETTLE_SECONDS,
     DYNAMIC_EXPORT_MAX_STEP_KW,
     DYNAMIC_MODE_FAST_POLL_INTERVAL,
+    DYNAMIC_SOC_EXPORT_DEFAULT_TARGET_SOC,
+    DYNAMIC_SOC_EXPORT_DEFAULT_BUFFER,
     MODBUS_OFFSET,
     SOC_CONVERSION_FACTOR,
     MAX_SOC_REGISTER,
     MIN_SOC_REGISTER,
     COMBINED_BATTERY_SOC,
     COMBINED_BATTERY_POWER,
+    COMBINED_BATTERY_CAPACITY,
+    COMBINED_HOUSE_LOAD,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -101,6 +106,11 @@ def soc_percent_to_register(soc_percent: float) -> int:
 
 class DynamicExportManager:
     """Manages Dynamic Export mode - continuous adjustment of battery discharge/charge."""
+
+    # Internal tracking mode tag stamped onto coordinator data for current_option detection.
+    # Subclasses (e.g. DynamicSOCExportManager) override to distinguish themselves while
+    # reusing the underlying control loop and command builders.
+    _dispatch_mode_tag = DISPATCH_MODE_DYNAMIC_EXPORT
 
     def __init__(
         self,
@@ -285,12 +295,9 @@ class DynamicExportManager:
         """
         data = self._coordinator.data
 
-        # Get target export from number entity (unique_id lookup — robust to device naming)
-        target_export_kw = _safe_get_by_unique_id(
-            self._hass,
-            f"neovolt_{self._device_name}_dynamic_mode_power_target",
-            1.0,
-        )
+        # Get target export — subclasses override _get_target_export_kw() to compute
+        # this dynamically (e.g. SOC-paced smooth rate). Base class reads the entity.
+        target_export_kw = self._get_target_export_kw()
 
         # Get discharge SOC cutoff (unique_id lookup — robust to device naming)
         soc_cutoff = int(_safe_get_by_unique_id(
@@ -409,6 +416,18 @@ class DynamicExportManager:
 
         self._last_update_time = now
 
+    def _get_target_export_kw(self) -> float:
+        """Return the desired net grid export setpoint (kW) for this cycle.
+
+        Base implementation reads the static "Dynamic Mode Power Target" entity.
+        Subclasses override to compute a dynamic setpoint.
+        """
+        return _safe_get_by_unique_id(
+            self._hass,
+            f"neovolt_{self._device_name}_dynamic_mode_power_target",
+            1.0,
+        )
+
     async def _send_discharge_command(self, power_kw: float, soc_cutoff: int) -> None:
         """Send force discharge command to inverter.
 
@@ -445,7 +464,7 @@ class DynamicExportManager:
             # Update coordinator with optimistic values
             self._coordinator.set_optimistic_value("dispatch_start", 1)
             self._coordinator.set_optimistic_value("dispatch_power", power_watts)
-            self._coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_EXPORT)
+            self._coordinator.set_optimistic_value("dispatch_mode", self._dispatch_mode_tag)
 
         except Exception as e:
             _LOGGER.error(f"Failed to send Dynamic Export discharge command: {e}")
@@ -487,7 +506,7 @@ class DynamicExportManager:
             # Update coordinator with optimistic values
             self._coordinator.set_optimistic_value("dispatch_start", 1)
             self._coordinator.set_optimistic_value("dispatch_power", -power_watts)
-            self._coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_EXPORT)
+            self._coordinator.set_optimistic_value("dispatch_mode", self._dispatch_mode_tag)
 
         except Exception as e:
             _LOGGER.error(f"Failed to send Dynamic Export charge command: {e}")
@@ -523,7 +542,7 @@ class DynamicExportManager:
             # Update coordinator with optimistic values
             self._coordinator.set_optimistic_value("dispatch_start", 1)
             self._coordinator.set_optimistic_value("dispatch_power", 0)
-            self._coordinator.set_optimistic_value("dispatch_mode", DISPATCH_MODE_DYNAMIC_EXPORT)
+            self._coordinator.set_optimistic_value("dispatch_mode", self._dispatch_mode_tag)
 
         except Exception as e:
             _LOGGER.error(f"Failed to send Dynamic Export standby command: {e}")
@@ -549,6 +568,108 @@ class DynamicExportManager:
             
         except Exception as e:
             _LOGGER.error(f"Failed to stop Dynamic Export dispatch: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Dynamic SOC Export Manager
+# ---------------------------------------------------------------------------
+
+class DynamicSOCExportManager(DynamicExportManager):
+    """Dynamic SOC Export — smooth discharge to a target SOC across a window.
+
+    Behaviour:
+      * Each cycle, compute the smooth discharge rate needed to reach the target
+        SOC by the end of the discharge window:
+
+            smooth_rate_kw = (current_soc - target_soc)% × capacity_kWh / remaining_hours
+
+      * To never import, the battery instead discharges at:
+
+            battery_discharge_kw = max(smooth_rate_kw, house_load_kw + safety_buffer_kw)
+
+        Equivalently, the grid export setpoint passed to the closed loop is:
+
+            target_export_kw = max(smooth_rate_kw - house_load_kw, safety_buffer_kw)
+
+      * When house load drops, the smooth rate is recomputed against the new
+        (lower) remaining SOC and the (smaller) remaining time — so any excess
+        discharged during a spike is naturally amortised across the rest of the
+        window.
+
+    The hard discharge cutoff (Dispatch Discharge Cutoff SOC) still applies as a
+    floor — once reached, the loop sends standby commands and Para5 enforces
+    the floor at the inverter.
+    """
+
+    _dispatch_mode_tag = DISPATCH_MODE_DYNAMIC_SOC_EXPORT
+
+    def _get_target_export_kw(self) -> float:
+        """Compute the export setpoint from SOC pacing and house load."""
+        data = self._coordinator.data
+
+        # ── Read user inputs ─────────────────────────────────────────────────
+        target_soc = _safe_get_by_unique_id(
+            self._hass,
+            f"neovolt_{self._device_name}_dispatch_discharge_target_soc",
+            float(DYNAMIC_SOC_EXPORT_DEFAULT_TARGET_SOC),
+        )
+        buffer_kw = _safe_get_by_unique_id(
+            self._hass,
+            f"neovolt_{self._device_name}_dispatch_discharge_export_buffer",
+            float(DYNAMIC_SOC_EXPORT_DEFAULT_BUFFER),
+        )
+
+        # ── Remaining time in window ─────────────────────────────────────────
+        # Floor at 1 minute so the smooth rate doesn't blow up in the final
+        # seconds; once the window elapses the control loop ends the mode anyway.
+        if self._start_time and self._duration_minutes:
+            elapsed_s = (dt_util.now() - self._start_time).total_seconds()
+            remaining_s = self._duration_minutes * 60.0 - elapsed_s
+            remaining_hours = max(remaining_s / 3600.0, 1.0 / 60.0)
+        else:
+            remaining_hours = 1.0
+
+        # ── Current SOC ──────────────────────────────────────────────────────
+        current_soc = data.get(COMBINED_BATTERY_SOC) or data.get("battery_soc")
+        if current_soc is None:
+            _LOGGER.warning(
+                "Dynamic SOC Export: current SOC unavailable, falling back to buffer only"
+            )
+            return buffer_kw
+
+        # ── Battery capacity (kWh) ───────────────────────────────────────────
+        capacity_kwh = (
+            data.get(COMBINED_BATTERY_CAPACITY)
+            or data.get("battery_capacity")
+            or 20.1
+        )
+
+        # ── Smooth rate ──────────────────────────────────────────────────────
+        soc_delta_pct = max(0.0, current_soc - target_soc)
+        energy_to_discharge_kwh = (soc_delta_pct / 100.0) * capacity_kwh
+        smooth_rate_kw = energy_to_discharge_kwh / remaining_hours
+
+        # ── House load (W → kW) ──────────────────────────────────────────────
+        house_load_w = (
+            data.get(COMBINED_HOUSE_LOAD)
+            or data.get("total_house_load")
+            or 0
+        )
+        house_load_kw = house_load_w / 1000.0
+
+        # ── Target grid export setpoint ──────────────────────────────────────
+        # Battery discharge = max(smooth_rate, house_load + buffer)
+        #   ⇒ grid export = battery_discharge − house_load
+        #                 = max(smooth_rate − house_load, buffer)
+        target_export_kw = max(smooth_rate_kw - house_load_kw, buffer_kw)
+
+        _LOGGER.debug(
+            f"Dynamic SOC Export: SOC {current_soc:.1f}%→{target_soc:.0f}%, "
+            f"remaining={remaining_hours * 60:.1f}min, capacity={capacity_kwh:.1f}kWh, "
+            f"smooth_rate={smooth_rate_kw:.2f}kW, load={house_load_kw:.2f}kW, "
+            f"buffer={buffer_kw:.2f}kW → target_export={target_export_kw:.2f}kW"
+        )
+        return target_export_kw
 
 
 # ---------------------------------------------------------------------------

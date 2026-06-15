@@ -109,6 +109,7 @@
           "force_discharge": "Force Discharge",
           "dynamic_export": "Dynamic Export",
           "dynamic_import": "Dynamic Import",
+          "dynamic_soc_export": "Dynamic SOC Export",
           "no_battery_charge": "No Battery Charge",
           "no_battery_discharge": "Idle (No Dispatch)"
         }
@@ -117,6 +118,12 @@
     "number": {
       "dynamic_mode_power_target": {
         "name": "Dynamic Mode Power Target"
+      },
+      "dispatch_discharge_target_soc": {
+        "name": "Dispatch Discharge Target SOC"
+      },
+      "dispatch_discharge_export_buffer": {
+        "name": "Dispatch Discharge Export Buffer"
       }
     },
     "button": {

@@ -66,6 +66,13 @@ DISPATCH_MODE_NO_CHARGE = 19       # Mode 19: Prevent all battery charging (sola
 DISPATCH_MODE_DYNAMIC_EXPORT = 99   # Dynamic Export  (hardware: Mode 2 + calculated power)
 DISPATCH_MODE_DYNAMIC_IMPORT = 98   # Dynamic Import  (hardware: Mode 2 + calculated power)
 DISPATCH_MODE_NO_DISCHARGE = 97     # No Battery Discharge (hardware: Mode 2 + zero power)
+DISPATCH_MODE_DYNAMIC_SOC_EXPORT = 96  # Dynamic SOC Export (hardware: Mode 2 + smooth-rate power)
+
+# Dynamic SOC Export defaults
+DYNAMIC_SOC_EXPORT_DEFAULT_TARGET_SOC = 40  # %  end-of-window target SOC target
+DYNAMIC_SOC_EXPORT_DEFAULT_BUFFER = 0.2     # kW  export safety buffer to prevent import
+DYNAMIC_SOC_EXPORT_MIN_BUFFER = 0           # kW
+DYNAMIC_SOC_EXPORT_MAX_BUFFER = DEFAULT_MAX_DISCHARGE_POWER # kW
 
 # Dispatch command duration default (seconds)
 # Used when resetting dispatch - maintains previous command for 90 seconds

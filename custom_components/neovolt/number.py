@@ -20,6 +20,10 @@ from .const import (
     DEFAULT_DYNAMIC_EXPORT_TARGET,
     DYNAMIC_EXPORT_MIN_POWER,
     DYNAMIC_EXPORT_MAX_POWER,
+    DYNAMIC_SOC_EXPORT_DEFAULT_TARGET_SOC,
+    DYNAMIC_SOC_EXPORT_DEFAULT_BUFFER,
+    DYNAMIC_SOC_EXPORT_MIN_BUFFER,
+    DYNAMIC_SOC_EXPORT_MAX_BUFFER,
     DEVICE_ROLE_FOLLOWER,
     GRID_POWER_OFFSET_MIN,
     GRID_POWER_OFFSET_MAX,
@@ -117,6 +121,26 @@ async def async_setup_entry(
             DYNAMIC_EXPORT_MIN_POWER, DYNAMIC_EXPORT_MAX_POWER, 0.05, UnitOfPower.KILO_WATT, None, False,
             default_value=DEFAULT_DYNAMIC_EXPORT_TARGET, icon="mdi:transmission-tower-export",
             config_entry=entry, fixed_max=True
+        ),
+
+        # ── Dynamic SOC Export (local storage) ─────────────────────────────
+        # End-of-window SOC target the smooth-rate calculation paces towards.
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "dispatch_discharge_target_soc", "Dispatch Discharge Target SOC",
+            4, 100, 1, PERCENTAGE, None, False,
+            default_value=DYNAMIC_SOC_EXPORT_DEFAULT_TARGET_SOC,
+            icon="mdi:battery-heart-variant",
+        ),
+        # Safety buffer (W) that the battery exports above house load whenever
+        # the smooth rate alone would otherwise allow grid import.
+        NeovoltNumber(
+            coordinator, device_info, device_name, client, hass,
+            "dispatch_discharge_export_buffer", "Dispatch Discharge Export Buffer",
+            DYNAMIC_SOC_EXPORT_MIN_BUFFER, DYNAMIC_SOC_EXPORT_MAX_BUFFER, 0.1,
+            UnitOfPower.KILO_WATT, None, False,
+            default_value=DYNAMIC_SOC_EXPORT_DEFAULT_BUFFER,
+            icon="mdi:shield-bug",
         ),
 
         # ── PV Capacity (32-bit register, in Watts) ────────────────────────
