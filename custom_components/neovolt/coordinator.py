@@ -1385,8 +1385,9 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
           positive → discharge, negative → charge.
         Mode 2 (DISPATCH_MODE_POWER_WITH_SOC) is used by both Force Charge and
         Force Discharge, so power sign is the only reliable differentiator.
-        Dynamic Export and Dynamic Import also use Mode 2 at the control-loop
-        level, so they are treated identically for watcher purposes.
+        Dynamic Export, Dynamic Import, and Dynamic SOC Export also use Mode 2
+        at the control-loop level, so they are treated identically for watcher
+        purposes.
         """
         dispatch_start = self._last_known_data.get("dispatch_start", 0)
         if not dispatch_start:
@@ -1397,7 +1398,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         dispatch_mode = self._last_known_data.get("dispatch_mode", 0)
 
         # Modes we watch (excludes no_charge=19, no_discharge=97)
-        watched_modes = {2, 6, 7}  # POWER_WITH_SOC, DYNAMIC_EXPORT, DYNAMIC_IMPORT
+        # DISPATCH_MODE_DYNAMIC_SOC_EXPORT (96) must be included so that after a
+        # HA restart the SOC watcher re-arms and continues enforcing the discharge
+        # cutoff floor for that mode.
+        watched_modes = {2, 6, 7, 96}  # POWER_WITH_SOC, DYNAMIC_EXPORT, DYNAMIC_IMPORT, DYNAMIC_SOC_EXPORT
         if dispatch_mode not in watched_modes:
             _LOGGER.debug(
                 f"DispatchSocWatcher: active dispatch mode {dispatch_mode} is not watched "
