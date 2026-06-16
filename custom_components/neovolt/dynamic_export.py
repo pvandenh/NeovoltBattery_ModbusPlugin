@@ -143,23 +143,17 @@ class DynamicExportManager:
         # between HA update cycles even if several cycles are missed.
         self._timeout_seconds: int = 600
 
-        # Get max charge/discharge power from config entry
-        entry = None
-        for config_entry in hass.config_entries.async_entries("neovolt"):
-            if config_entry.data.get("device_name") == device_name:
-                entry = config_entry
-                break
-
-        if entry:
-            self._max_discharge_power = entry.data.get(
-                CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER
-            )
-            self._max_charge_power = entry.data.get(
-                CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER
-            )
-        else:
-            self._max_discharge_power = DEFAULT_MAX_DISCHARGE_POWER
-            self._max_charge_power = DEFAULT_MAX_CHARGE_POWER
+        # Get max charge/discharge power directly from the coordinator's own config
+        # entry — this is always correct and avoids the previous name-matching loop
+        # which silently fell back to 5 kW defaults whenever device_name didn't
+        # match exactly (e.g. slugified vs. un-slugified names, migrated entries).
+        entry = coordinator.config_entry
+        self._max_discharge_power = entry.data.get(
+            CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER
+        )
+        self._max_charge_power = entry.data.get(
+            CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER
+        )
 
         _LOGGER.info(
             f"Initialized Dynamic Export Manager for {device_name} "
@@ -716,23 +710,17 @@ class DynamicImportManager:
         # between HA update cycles even if several cycles are missed.
         self._timeout_seconds: int = 600
 
-        # Get max charge/discharge power from config entry
-        entry = None
-        for config_entry in hass.config_entries.async_entries("neovolt"):
-            if config_entry.data.get("device_name") == device_name:
-                entry = config_entry
-                break
-
-        if entry:
-            self._max_discharge_power = entry.data.get(
-                CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER
-            )
-            self._max_charge_power = entry.data.get(
-                CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER
-            )
-        else:
-            self._max_discharge_power = DEFAULT_MAX_DISCHARGE_POWER
-            self._max_charge_power = DEFAULT_MAX_CHARGE_POWER
+        # Get max charge/discharge power directly from the coordinator's own config
+        # entry — this is always correct and avoids the previous name-matching loop
+        # which silently fell back to 5 kW defaults whenever device_name didn't
+        # match exactly (e.g. slugified vs. un-slugified names, migrated entries).
+        entry = coordinator.config_entry
+        self._max_discharge_power = entry.data.get(
+            CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER
+        )
+        self._max_charge_power = entry.data.get(
+            CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER
+        )
 
         _LOGGER.info(
             f"Initialized Dynamic Import Manager for {device_name} "
