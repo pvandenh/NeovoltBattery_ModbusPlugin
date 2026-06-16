@@ -59,6 +59,20 @@ def _safe_get_by_unique_id(hass: HomeAssistant, unique_id: str, default: float) 
     return value
 
 
+def _safe_get_by_unique_id_with_source(
+    hass: HomeAssistant, unique_id: str, default: float
+) -> tuple[float, bool, str]:
+    """Look up a number entity by unique_id and return value + fallback metadata.
+
+    Returns (value, used_default, reason) so callers can log a warning when a
+    hardcoded default was substituted for a missing or unavailable entity.
+    This is important for dispatch parameters like duration, where silently
+    falling back to 120 min causes the mode to stop earlier than the user set.
+    """
+    from .select import safe_get_by_unique_id
+    return safe_get_by_unique_id(hass, unique_id, default)
+
+
 def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -> float:
     """
     Safely retrieve a float value from a Home Assistant entity.
@@ -173,11 +187,21 @@ class DynamicExportManager:
             return
 
         # Get duration from number entity (unique_id lookup — robust to device naming)
-        duration_minutes = int(_safe_get_by_unique_id(
+        _duration, duration_default, duration_reason = _safe_get_by_unique_id_with_source(
             self._hass,
             f"neovolt_{self._device_name}_dispatch_duration",
             120.0,
-        ))
+        )
+        duration_minutes = int(_duration)
+        if duration_default:
+            _LOGGER.warning(
+                f"Dynamic Export is using fallback duration={duration_minutes}min "
+                f"({duration_reason}). The dispatch_duration entity was not available "
+                f"at start time — mode will stop after {duration_minutes} minutes "
+                f"instead of the configured value. "
+                f"To avoid this, ensure all Dispatch number entities are loaded "
+                f"before starting Dynamic Export."
+            )
 
         _LOGGER.info(f"Starting Dynamic Export mode (duration: {duration_minutes} minutes)")
         self._running = True
@@ -739,11 +763,21 @@ class DynamicImportManager:
             _LOGGER.warning("Dynamic Import already running")
             return
 
-        duration_minutes = int(_safe_get_by_unique_id(
+        _duration, duration_default, duration_reason = _safe_get_by_unique_id_with_source(
             self._hass,
             f"neovolt_{self._device_name}_dispatch_duration",
             120.0,
-        ))
+        )
+        duration_minutes = int(_duration)
+        if duration_default:
+            _LOGGER.warning(
+                f"Dynamic Import is using fallback duration={duration_minutes}min "
+                f"({duration_reason}). The dispatch_duration entity was not available "
+                f"at start time — mode will stop after {duration_minutes} minutes "
+                f"instead of the configured value. "
+                f"To avoid this, ensure all Dispatch number entities are loaded "
+                f"before starting Dynamic Import."
+            )
 
         _LOGGER.info(f"Starting Dynamic Import mode (duration: {duration_minutes} minutes)")
         self._running = True
