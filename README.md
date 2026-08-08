@@ -43,6 +43,9 @@ This integration connects your Neovolt inverter to Home Assistant, giving you:
 
 ## 📦 Installation
 
+Note:
+Ensure to power down your system before accessing the comms port to avoid any shorts. 
+   
 ### Step 1: Choose Your Connection Method
 
 | Connection Type | When to Use | Pros | Cons |
@@ -52,10 +55,11 @@ This integration connects your Neovolt inverter to Home Assistant, giving you:
 
 #### Option A: Direct Ethernet
 
-1. Plug an Ethernet cable into the inverter's Modbus TCP port and connect to your network.
-2. Find the inverter's IP address in your router's device list and note it down.
-3. Reserve a static IP for it in your router's DHCP settings.
-4. Default settings are: **Port 502**, **Slave ID 85** — no changes needed.
+1. Plug an Ethernet cable into the inverter's Modbus TCP port and connect to your network. On BW-INV-SPH5K this port is labelled LAN on the comms port and appear with hostname "WIZnet".
+2. Power system up
+3. Find the inverter's IP address in your router's device list and note it down.
+4. Reserve a static IP for it in your router's DHCP settings.
+5. Default settings are: **Port 502**, **Slave ID 85** — no changes needed.
 
 #### Option B: EW11A WiFi Adapter
 
@@ -63,10 +67,12 @@ This integration connects your Neovolt inverter to Home Assistant, giving you:
 
 Quick summary:
 1. Wire the EW11A to your inverter's RS485 port.
-2. Connect EW11A to your WiFi network.
-3. Configure serial settings: **9600 baud, Modbus protocol**.
-4. Configure network settings: **TCP Server, Port 502**.
-5. Assign a static IP to the EW11A in your router.
+2. Power system up
+3. Connect EW11A to your WiFi network.
+4. Configure serial settings: **9600 baud, Modbus protocol**.
+5. Configure network settings: **TCP Server, Port 502**.
+6. Assign a static IP to the EW11A in your router.
+
 
 ---
 
@@ -439,6 +445,11 @@ The dispatch power slider maximum is derived from your configured Max Charge/Dis
 ### Stale Data Warning
 
 The `data_stale` attribute on sensors indicates the integration is using cached data due to a connection issue. Auto-recovery will reconnect automatically. Sensors remain available for up to 12 hours on cached data before becoming unavailable.
+
+### High draw or faster depletion
+
+In some cases where there are multiple batteries, they dont all start up when you power on via the main switch. If you see this press the "power" button on each battery unit. Check your Neovolt app to ensure correct Battery installed capacity. This issue shows itself as a faster depletion and there are no fault codes or errors.
+
 
 ---
 
