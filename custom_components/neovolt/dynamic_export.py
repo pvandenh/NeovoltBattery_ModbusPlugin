@@ -60,6 +60,19 @@ def _safe_get_by_unique_id(hass: HomeAssistant, unique_id: str, default: float) 
     return value
 
 
+def _entry_power_limit(coordinator, key: str, default: float) -> float:
+    """Read a max charge/discharge power (kW) from the config entry at call time.
+
+    The managers are created once and kept on the coordinator, so caching the
+    limit in __init__ meant a new value saved in the options flow was ignored
+    until Home Assistant restarted. Reading it on every cycle applies it at once.
+    """
+    try:
+        return float(coordinator.config_entry.data.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _safe_get_by_unique_id_with_source(
     hass: HomeAssistant, unique_id: str, default: float
 ) -> tuple[float, bool, str]:
@@ -158,23 +171,25 @@ class DynamicExportManager:
         # between HA update cycles even if several cycles are missed.
         self._timeout_seconds: int = 600
 
-        # Get max charge/discharge power directly from the coordinator's own config
-        # entry — this is always correct and avoids the previous name-matching loop
-        # which silently fell back to 5 kW defaults whenever device_name didn't
-        # match exactly (e.g. slugified vs. un-slugified names, migrated entries).
-        entry = coordinator.config_entry
-        self._max_discharge_power = entry.data.get(
-            CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER
-        )
-        self._max_charge_power = entry.data.get(
-            CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER
-        )
+        # Max charge/discharge power come from the coordinator's own config entry
+        # (see the properties below), which avoids the old name-matching loop that
+        # silently fell back to 5 kW defaults whenever device_name didn't match.
 
         _LOGGER.info(
             f"Initialized Dynamic Export Manager for {device_name} "
             f"(max discharge: {self._max_discharge_power}kW, "
             f"max charge: {self._max_charge_power}kW)"
         )
+
+    @property
+    def _max_discharge_power(self) -> float:
+        """Max discharge power (kW), read live from the config entry."""
+        return _entry_power_limit(self._coordinator, CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
+
+    @property
+    def _max_charge_power(self) -> float:
+        """Max charge power (kW), read live from the config entry."""
+        return _entry_power_limit(self._coordinator, CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
 
     @property
     def is_running(self) -> bool:
@@ -744,23 +759,24 @@ class DynamicImportManager:
         # between HA update cycles even if several cycles are missed.
         self._timeout_seconds: int = 600
 
-        # Get max charge/discharge power directly from the coordinator's own config
-        # entry — this is always correct and avoids the previous name-matching loop
-        # which silently fell back to 5 kW defaults whenever device_name didn't
-        # match exactly (e.g. slugified vs. un-slugified names, migrated entries).
-        entry = coordinator.config_entry
-        self._max_discharge_power = entry.data.get(
-            CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER
-        )
-        self._max_charge_power = entry.data.get(
-            CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER
-        )
+        # Max charge/discharge power come from the coordinator's own config entry
+        # (see the properties below), read live so option changes apply at once.
 
         _LOGGER.info(
             f"Initialized Dynamic Import Manager for {device_name} "
             f"(max charge: {self._max_charge_power}kW, "
             f"max discharge: {self._max_discharge_power}kW)"
         )
+
+    @property
+    def _max_discharge_power(self) -> float:
+        """Max discharge power (kW), read live from the config entry."""
+        return _entry_power_limit(self._coordinator, CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
+
+    @property
+    def _max_charge_power(self) -> float:
+        """Max charge power (kW), read live from the config entry."""
+        return _entry_power_limit(self._coordinator, CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER)
 
     @property
     def is_running(self) -> bool:

@@ -397,12 +397,25 @@ class NeovoltOptionsFlowHandler(config_entries.OptionsFlow):
                 self._new_data[CONF_CONSECUTIVE_FAILURE_THRESHOLD] = user_input[CONF_CONSECUTIVE_FAILURE_THRESHOLD]
                 self._new_data[CONF_STALENESS_THRESHOLD] = user_input[CONF_STALENESS_THRESHOLD]
 
+                old_data = dict(self.config_entry.data)
                 self.hass.config_entries.async_update_entry(
                     self.config_entry,
                     data=self._new_data,
                 )
 
-                return self.async_create_entry(title="", data={})
+                # Max charge/discharge power are read live, so they apply without a
+                # reload. Role and polling settings are read at setup, so reload for those.
+                live_keys = {CONF_MAX_CHARGE_POWER, CONF_MAX_DISCHARGE_POWER}
+                if any(
+                    old_data.get(key) != value
+                    for key, value in self._new_data.items()
+                    if key not in live_keys
+                ):
+                    self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
+
+                # entry.options holds the coordinator's saved runtime data (daily energy
+                # baselines, dispatch targets and duration); returning {} here wiped it.
+                return self.async_create_entry(title="", data=dict(self.config_entry.options))
 
         return self.async_show_form(
             step_id="polling",

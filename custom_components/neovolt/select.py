@@ -11,6 +11,10 @@ from homeassistant.helpers.entity_registry import async_get as async_get_entity_
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_MAX_CHARGE_POWER,
+    CONF_MAX_DISCHARGE_POWER,
+    DEFAULT_MAX_CHARGE_POWER,
+    DEFAULT_MAX_DISCHARGE_POWER,
     DEVICE_ROLE_FOLLOWER,
     DISPATCH_MODE_POWER_WITH_SOC,
     DISPATCH_MODE_DYNAMIC_EXPORT,
@@ -30,6 +34,26 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def clamp_to_power_limit(coordinator, power: float, key: str, default: float, what: str) -> float:
+    """Hold a Force Charge/Discharge power to its own direction's configured maximum.
+
+    The shared Dispatch Power slider goes up to the higher of the two limits, so
+    with asymmetric limits (say 10 kW charge, 11 kW discharge) it could otherwise
+    ask the inverter to charge above the charge limit.
+    """
+    try:
+        limit = float(coordinator.config_entry.data.get(key, default))
+    except (TypeError, ValueError):
+        limit = float(default)
+    if power > limit:
+        _LOGGER.warning(
+            "%s requested %.2f kW but the configured maximum is %.2f kW; using %.2f kW",
+            what, power, limit, limit,
+        )
+        return limit
+    return power
 
 
 def safe_get_entity_float(hass: HomeAssistant, entity_id: str, default: float) -> float:
@@ -355,6 +379,9 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             f"neovolt_{self._device_name}_dispatch_power",
             3.0
         )
+        power = clamp_to_power_limit(
+            self.coordinator, power, CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER, "Force Charge"
+        )
 
         _duration, duration_default, duration_reason = safe_get_by_unique_id(
             self._hass,
@@ -453,6 +480,9 @@ class NeovoltDispatchModeSelect(CoordinatorEntity, SelectEntity):
             self._hass,
             f"neovolt_{self._device_name}_dispatch_power",
             3.0
+        )
+        power = clamp_to_power_limit(
+            self.coordinator, power, CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER, "Force Discharge"
         )
         _duration, duration_default, duration_reason = safe_get_by_unique_id(
             self._hass,
