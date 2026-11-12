@@ -432,6 +432,10 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
 
         # Track last successful data fetch for stale data detection
         self._last_successful_data_time: Optional[datetime] = None
+        # Time of the last register block that really came back from the inverter.
+        # _last_successful_data_time also moves when every block fails and cached
+        # values are returned, so it can't show a lost connection.
+        self._last_read_time: Optional[datetime] = None
         self._last_known_data: Dict[str, Any] = {}
 
         # Load persistent values from config entry options
@@ -662,6 +666,7 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
                 # Poll this block
                 block_data = self._read_block(block_name)
                 if block_data:
+                    self._last_read_time = now
                     # Success - reset failure counter and update polling interval
                     self.polling_manager.reset_block_failures(block_name)
                     changed = self.polling_manager.update_after_poll(
@@ -1370,6 +1375,13 @@ class NeovoltDataUpdateCoordinator(DataUpdateCoordinator):
         if self._last_successful_data_time is None:
             return None
         return (dt_util.now() - self._last_successful_data_time).total_seconds()
+
+    @property
+    def last_read_age_seconds(self) -> Optional[float]:
+        """Return seconds since a register block was last read successfully."""
+        if self._last_read_time is None:
+            return None
+        return (dt_util.now() - self._last_read_time).total_seconds()
 
     @property
     def is_data_stale(self) -> bool:
